@@ -818,9 +818,10 @@ class HypnoEngine {
       parking:{wet:72,decay:3.8}
     };
     const p = profiles[echo] ?? profiles.basement;
-    // Derin uyku frekansı arkada devam etsin, ses net duyulsun
-    this.setEntrainment(2.5, 0.6); // delta
-    this.update({ wet: p.wet, whisperGain: 0, binauralGain: 18, masterGain: 82 });
+    // Derin üçlü frekans: 1.5 / 3 / 6 Hz - doğrudan uyku
+    this.setEntrainment(1.5, 0.8);
+    // Üçlü harmonik takviye
+    this.update({ wet: p.wet, whisperGain: 0, binauralGain: 25, masterGain: 85 });
     this.setDecay(p.decay);
     this.setBinauralOn(true);
     this.setWhisperOn(false);
@@ -839,15 +840,20 @@ class HypnoEngine {
     utter.pitch = 1.0;
     utter.volume = 1.0;
 
-    const voice = pickVoice();
+    const voice = getVoice();
     if (voice) utter.voice = voice;
 
+    const now = this.ctx!.currentTime;
     utter.onstart = () => {
-      // Ses başlarken master hafif artar
-      if (this.master) this.master.gain.setTargetAtTime(0.9, this.ctx!.currentTime, 0.2);
+      if (this.master) {
+        this.master.gain.cancelScheduledValues(now);
+        this.master.gain.setValueAtTime(0.0, now);
+        this.master.gain.linearRampToValueAtTime(1.0, now + 2.0);
+        this.master.gain.linearRampToValueAtTime(0.0, now + 2.0 + 3.0);
+      }
     };
     utter.onend = () => {
-      if (this.master) this.master.gain.setTargetAtTime(0.75, this.ctx!.currentTime, 0.5);
+      if (this.master) this.master.gain.setTargetAtTime(0.6, this.ctx!.currentTime, 0.5);
     };
 
     speechSynthesis.cancel();
