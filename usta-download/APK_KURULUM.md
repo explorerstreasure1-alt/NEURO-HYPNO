@@ -50,7 +50,8 @@ okuma devam eder.
 ## 7. Telefone kur
 * Telefonda Ayarlar > Güvenlik > Bilinmeyen kaynaklara izin ver
 * APK'ya tıkla, kurulum yap
-* Uygulama logosu ile ana ekranda görünür
+* Uygulama doğrudan NEURO-HYPNO ekranıyla açılır (eski "indirme" ekranı kaldırıldı).
+* Oturum başlatınca ekran kapansa bile `PlaybackForegroundService` sayesinde çalmaya devam eder.
 
 ## Ses paketleri (aksen için şart)
 

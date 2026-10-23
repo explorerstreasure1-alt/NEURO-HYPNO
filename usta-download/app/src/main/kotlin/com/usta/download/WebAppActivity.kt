@@ -1,6 +1,8 @@
 package com.usta.download
 
 import android.annotation.SuppressLint
+import android.Manifest
+import android.content.pm.PackageManager
 import android.os.Build
 import android.os.Bundle
 import android.view.KeyEvent
@@ -9,7 +11,7 @@ import android.webkit.WebChromeClient
 import android.webkit.WebSettings
 import android.webkit.WebView
 import android.webkit.WebViewClient
-import androidx.appcompat.app.AppCompatActivity
+import androidx.activity.ComponentActivity
 
 /**
  * Web uygulamasını tam ekran WebView içinde çalıştırır.
@@ -20,7 +22,7 @@ import androidx.appcompat.app.AppCompatActivity
  *  - `AndroidBridge` JS köprüsü (web tarafı keepAlive.ts çağırır)
  *  - Activity arka plana geçerken WebView DURDURULMAZ (onPause'da webView.onPause yok).
  */
-class WebAppActivity : AppCompatActivity() {
+class WebAppActivity : ComponentActivity() {
 
     private lateinit var webView: WebView
     private lateinit var ttsBridge: TtsBridge
@@ -39,6 +41,13 @@ class WebAppActivity : AppCompatActivity() {
 
         if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.KITKAT) {
             WebView.setWebContentsDebuggingEnabled(true)
+        }
+
+        // Android 13+: arka plan bildirimi için izin
+        if (Build.VERSION.SDK_INT >= 33 &&
+            checkSelfPermission(Manifest.permission.POST_NOTIFICATIONS) != PackageManager.PERMISSION_GRANTED
+        ) {
+            requestPermissions(arrayOf(Manifest.permission.POST_NOTIFICATIONS), 7)
         }
 
         webView = WebView(this).apply {
