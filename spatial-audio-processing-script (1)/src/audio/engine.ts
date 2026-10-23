@@ -811,17 +811,17 @@ class HypnoEngine {
 
   // Yabancı dil kelime/cümle okuma + yankılı sahne
   speakLightWhisper(text: string, lang = 'tr-TR', rate = 0.92, echo = 'basement') {
-    // Yankı profili
+    // Yankı profili - net okuma için düşük wet
     const profiles: Record<string,{wet:number,decay:number}> = {
-      basement:{wet:68,decay:3.2},
-      stage:{wet:55,decay:2.4},
-      parking:{wet:72,decay:3.8}
+      basement:{wet:45,decay:2.2},
+      stage:{wet:38,decay:1.8},
+      parking:{wet:48,decay:2.5}
     };
     const p = profiles[echo] ?? profiles.basement;
-    // Derin üçlü frekans: 1.5 / 3 / 6 Hz - doğrudan uyku
-    this.setEntrainment(1.5, 0.8);
-    // Üçlü harmonik takviye
-    this.update({ wet: p.wet, whisperGain: 0, binauralGain: 25, masterGain: 85 });
+    // Derin üçlü frekans arkada çok düşük seviyede
+    this.setEntrainment(1.5, 0.5);
+    // Netlik için whisper 0, binaural çok düşük, reverb kontrollü
+    this.update({ wet: p.wet, whisperGain: 0, binauralGain: 8, masterGain: 88 });
     this.setDecay(p.decay);
     this.setBinauralOn(true);
     this.setWhisperOn(false);
@@ -847,9 +847,9 @@ class HypnoEngine {
     utter.onstart = () => {
       if (this.master) {
         this.master.gain.cancelScheduledValues(now);
-        this.master.gain.setValueAtTime(0.0, now);
-        this.master.gain.linearRampToValueAtTime(1.0, now + 2.0);
-        this.master.gain.linearRampToValueAtTime(0.0, now + 2.0 + 3.0);
+        this.master.gain.setTargetAtTime(0.0, now, 0.01);
+        this.master.gain.setTargetAtTime(0.95, now + 0.3, 0.4); // yumuşak çıkış
+        this.master.gain.setTargetAtTime(0.6, now + 4.0, 1.2); // kademeli iniş
       }
     };
     utter.onend = () => {
