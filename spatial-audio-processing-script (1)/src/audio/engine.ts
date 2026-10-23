@@ -809,24 +809,45 @@ class HypnoEngine {
     this.analyserTime?.getByteTimeDomainData(data as unknown as Uint8Array<ArrayBuffer>);
   }
 
-  // Yabancı dil kelime/cümle okuma + hafif yankı
-  speakLightWhisper(text: string, lang = 'tr-TR', rate = 0.92) {
-    // Motoru hafif yankı moduna al
-    this.update({ wet: 48, whisperGain: 58, binauralGain: 30, masterGain: 88 });
+  // Yabancı dil kelime/cümle okuma + yankılı sahne
+  speakLightWhisper(text: string, lang = 'tr-TR', rate = 0.92, echo = 'basement') {
+    // Yankı profili
+    const profiles: Record<string,{wet:number,decay:number}> = {
+      basement:{wet:68,decay:3.2},
+      stage:{wet:55,decay:2.4},
+      parking:{wet:72,decay:3.8}
+    };
+    const p = profiles[echo] ?? profiles.basement;
+    // Derin uyku frekansı arkada devam etsin, ses net duyulsun
+    this.setEntrainment(2.5, 0.6); // delta
+    this.update({ wet: p.wet, whisperGain: 0, binauralGain: 18, masterGain: 82 });
+    this.setDecay(p.decay);
     this.setBinauralOn(true);
     this.setWhisperOn(false);
+
+    const getVoice = () => {
+      let voices = speechSynthesis.getVoices();
+      if (!voices.length) return null;
+      let v = voices.find(v => v.lang.toLowerCase().startsWith(lang.split('-')[0].toLowerCase()));
+      if (!v) v = voices.find(v => v.lang.toLowerCase().startsWith('en'));
+      return v ?? null;
+    };
 
     const utter = new SpeechSynthesisUtterance(text);
     utter.lang = lang;
     utter.rate = rate;
-    utter.pitch = 0.95;
-    utter.volume = 0.85;
+    utter.pitch = 1.0;
+    utter.volume = 1.0;
+
+    const voice = pickVoice();
+    if (voice) utter.voice = voice;
 
     utter.onstart = () => {
-      if (this.whisperBus) this.whisperBus.gain.setTargetAtTime(0.6, this.ctx!.currentTime, 0.3);
+      // Ses başlarken master hafif artar
+      if (this.master) this.master.gain.setTargetAtTime(0.9, this.ctx!.currentTime, 0.2);
     };
     utter.onend = () => {
-      if (this.whisperBus) this.whisperBus.gain.setTargetAtTime(0.35, this.ctx!.currentTime, 0.8);
+      if (this.master) this.master.gain.setTargetAtTime(0.75, this.ctx!.currentTime, 0.5);
     };
 
     speechSynthesis.cancel();
