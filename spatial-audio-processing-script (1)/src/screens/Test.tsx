@@ -1,19 +1,25 @@
-import { useState } from 'react';
-import { ChevronLeft, Play } from 'lucide-react';
+import { useEffect, useState } from 'react';
+import { ChevronLeft, Play, Waves } from 'lucide-react';
 import { useApp, buzz } from '../store';
 import { engine } from '../audio/engine';
 import { phrasesOf } from '../data/phrases';
+import { getEndpoint, setEndpoint } from '../audio/ttsSettings';
+import type { EchoProfile } from '../audio/echoChain';
 
 const LANG_MAP: Record<string, string> = {
   ES: 'es-ES', FR: 'fr-FR', EN: 'en-US', DE: 'de-DE', IT: 'it-IT', JP: 'ja-JP',
 };
-const ECHOES = ['basement', 'stage', 'parking'] as const;
+const ECHOES: EchoProfile[] = ['basement', 'stage', 'parking'];
 
 export default function Test() {
   const { setTab } = useApp();
   const [lang, setLang] = useState('EN');
   const [idx, setIdx] = useState(0);
-  const [echo, setEcho] = useState<(typeof ECHOES)[number]>('basement');
+  const [echo, setEcho] = useState<EchoProfile>('basement');
+  const [endpoint, setEndpointState] = useState('');
+  const [realMsg, setRealMsg] = useState('');
+
+  useEffect(() => { setEndpointState(getEndpoint() ?? ''); }, []);
 
   const list = phrasesOf(lang);
   const phrase = list[idx % list.length];
@@ -21,7 +27,19 @@ export default function Test() {
   const speak = async () => {
     buzz(10);
     const text = phrase.pattern.replace('___', 'usta');
-    await engine.speakSwell(text, LANG_MAP[lang] ?? 'en-US', 0.9, echo);
+    const ep = getEndpoint();
+    if (ep) {
+      const mode = await engine.speakWithRealEcho(text, LANG_MAP[lang] ?? 'en-US', 0.9, echo, ep);
+      setRealMsg(mode === 'echo' ? 'Gerçek yankı ile okundu' : 'Endpoint çalışmadı, yaklaşık yankı');
+    } else {
+      await engine.speakSwell(text, LANG_MAP[lang] ?? 'en-US', 0.9, echo);
+      setRealMsg('Yaklaşık yankı (Web Speech)');
+    }
+  };
+
+  const saveEndpoint = (v: string) => {
+    setEndpointState(v);
+    setEndpoint(v);
   };
 
   const chip = (active: boolean) =>
@@ -51,11 +69,29 @@ export default function Test() {
       </div>
 
       <div className="mb-2 font-mono text-[10px] tracking-widest text-white/40">YANKI</div>
-      <div className="mb-4 flex flex-wrap gap-2">
+      <div className="mb-3 flex flex-wrap gap-2">
         {ECHOES.map((e) => (
           <button key={e} onClick={() => setEcho(e)} className={chip(echo === e)}>{e}</button>
         ))}
+        <button
+          onClick={async () => { buzz(10); await engine.playEchoDemo(echo); }}
+          className="pressable inline-flex items-center gap-1.5 rounded-xl border border-cyan-400/30 bg-cyan-500/10 px-3 py-2 text-[12px] font-bold text-cyan-200"
+        >
+          <Waves className="h-3.5 w-3.5" /> YANKIYI DENE
+        </button>
       </div>
+
+      <div className="mb-1 font-mono text-[10px] tracking-widest text-white/40">GERÇEK YANKI İÇİN TTS ENDPOINT (opsiyonel)</div>
+      <input
+        value={endpoint}
+        onChange={(e) => saveEndpoint(e.target.value)}
+        placeholder="https://.../api/tts?text={text}&lang={lang}"
+        className="mb-1 w-full rounded-xl border border-white/10 bg-black/40 px-3 py-2 font-mono text-[11px] text-white/80 outline-none focus:border-cyan-400/50"
+      />
+      <p className="mb-4 font-mono text-[9px] leading-relaxed text-white/30">
+        Audio (mp3/wav) döndüren bir endpoint girilirse ses Convolver + ping-pong zincirinden geçer; gerçek yankı oluşur.
+      </p>
+      {realMsg && <p className="mb-3 font-mono text-[10px] text-emerald-300/80">{realMsg}</p>}
 
       <div className="rounded-2xl border border-white/10 bg-white/[0.04] p-4">
         <div className="font-mono text-[10px] tracking-widest text-white/35">{lang} · {phrase.note}</div>

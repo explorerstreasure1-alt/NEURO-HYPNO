@@ -1,6 +1,8 @@
 import { engine } from './engine';
 import { generateRhymeSet, LEVEL_RATE, type CEFR } from '../data/rhymes';
 import { rampToPhase } from './hypnagogic';
+import { getEndpoint } from './ttsSettings';
+import type { EchoProfile } from './echoChain';
 
 export type ImprintMode = 'words' | 'sentences' | 'both';
 
@@ -9,7 +11,10 @@ export interface ImprintOptions {
   level?: CEFR;
   mode?: ImprintMode;
   setDurationMin?: number; // her 4'lü setin süresi
+  echo?: EchoProfile;
+  realEcho?: boolean;      // TTS → Convolver (gerçek yankı)
   onSet?: (info: { index: number; lines: string[]; level: CEFR }) => void;
+  onMode?: (mode: 'echo' | 'fallback') => void;
 }
 
 const LANG_MAP: Record<string, string> = {
@@ -33,8 +38,14 @@ export async function startNeuroImprint(opts: ImprintOptions = {}) {
     level = 'A1',
     mode = 'both',
     setDurationMin = 42,
+    echo = 'basement',
+    realEcho = true,
     onSet,
+    onMode,
   } = opts;
+
+  const endpoint = getEndpoint();
+  const useReal = realEcho && !!endpoint;
 
   const myToken = ++runToken;
 
@@ -62,7 +73,15 @@ export async function startNeuroImprint(opts: ImprintOptions = {}) {
     // Okuma turu: satırlar arası nefes payı
     for (const line of lines) {
       if (myToken !== runToken) return;
-      await engine.speakSwell(line, lang, rate, 'basement');
+
+      if (useReal) {
+        // Gerçek yankı; endpoint çökerse engine kendi içinde Web Speech'e düşer
+        const used = await engine.speakWithRealEcho(line, lang, rate, echo, endpoint);
+        onMode?.(used);
+      } else {
+        await engine.speakSwell(line, lang, rate, echo);
+      }
+
       await sleep(2600);
     }
 

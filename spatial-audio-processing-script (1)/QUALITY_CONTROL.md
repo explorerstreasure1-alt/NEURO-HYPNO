@@ -38,10 +38,34 @@ Tarih: 2026-10-23 · `npm run build` ✅ · `npx tsc --noEmit` ✅
 * **Yankı:** bodrum (RT60 2.2 s), sahne (1.8 s), otopark (2.5 s). Netlik için wet %38–48 aralığında tutuldu.
 * **Bilinen sınır:** `SpeechSynthesis` çıktısı Web Audio grafiğine sokulamıyor; yankı, motorun reverb yatağı ile birlikte çalışıyor. Gerçek "sesin kendisi yankılanıyor" etkisi için TTS'i dosya olarak alıp `decodeAudioData` ile `ConvolverNode`'a bağlamak gerekir (sonraki adım).
 
-## 4. Sonraki Adımlar (öneri)
+## 4. Gerçek Yankı (tamamlandı)
 
-1. TTS → AudioBuffer → Convolver zinciri (gerçek yankı).
-2. `onboundary` ile kelime bazlı vurgu ve zamanlama.
-3. Faz geçişlerini oturum zaman çizelgesine bağlama (0–10–20–42 dk).
-4. Kulaklık/hoparlör otomatik algılama ve kalibrasyon hatırlatıcısı.
-5. Oturum günlüğü + sabah hatırlama testi ile etkinlik ölçümü.
+Önceki sınır: `SpeechSynthesis` çıktısı Web Audio'ya sokulamıyordu.
+
+Çözüm:
+* `api/tts.ts` — Vercel Edge Function. Google TTS, başarısızsa StreamElements'e düşer. CORS açık, `audio/mpeg` döner.
+* `src/audio/tts.ts` — `fetch → arrayBuffer → decodeAudioData`.
+* `src/audio/echoChain.ts` — gerçek grafik:
+  `input → dry → limiter → out`
+  `input → preDelay → convolver(RT60 IR) → damp → wet → limiter`
+  `input → ping-pong delay L/R (feedback + pan) → limiter`
+* `engine.speakWithRealEcho()` — buffer'ı bu zincirden geçirir. Endpoint yoksa/başarısızsa Web Speech'e düşer.
+* `engine.playEchoDemo()` — ağ olmadan yankıyı kanıtlayan vokal benzeri test buffer'ı.
+
+Yankı profilleri (gerçek IR):
+| Profil | RT60 | Pre-delay | Wet | Damp | Ping-pong |
+|---|---|---|---|---|---|
+| Bodrum | 2.2 s | 20 ms | 0.46 | 4.2 kHz | 110 ms / 0.22 |
+| Sahne | 1.4 s | 12 ms | 0.32 | 6.8 kHz | 80 ms / 0.14 |
+| Otopark | 3.0 s | 32 ms | 0.55 | 3.2 kHz | 150 ms / 0.30 |
+
+Devreye alma: Vercel'de proje kökü uygulama klasörü olmalı ki `/api/tts` yayınlansın.
+Yerelde test için: `npx vercel dev` veya Test ekranındaki endpoint alanına kendi URL'ni gir.
+
+## 5. Sonraki Adımlar (öneri)
+
+1. `onboundary` ile kelime bazlı vurgu ve zamanlama.
+2. Faz geçişlerini oturum zaman çizelgesine bağlama (0–10–20–42 dk).
+3. Kulaklık/hoparlör otomatik algılama ve kalibrasyon hatırlatıcısı.
+4. Oturum günlüğü + sabah hatırlama testi ile etkinlik ölçümü.
+5. Uzun cümleler için TTS parçalama (190 karakter sınırı) ve cümle birleştirme.

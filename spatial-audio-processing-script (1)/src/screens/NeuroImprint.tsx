@@ -1,21 +1,34 @@
-import { useRef, useState } from 'react';
-import { ChevronLeft, Play, Square } from 'lucide-react';
+import { useEffect, useRef, useState } from 'react';
+import { ChevronLeft, Play, Square, Waves } from 'lucide-react';
 import { useApp, buzz } from '../store';
 import { startNeuroImprint, stopNeuroImprint } from '../audio/neuroImprint';
 import { CEFR_ORDER, type CEFR } from '../data/rhymes';
+import { engine } from '../audio/engine';
+import type { EchoProfile } from '../audio/echoChain';
+import { getEndpoint } from '../audio/ttsSettings';
 
 const LANGUAGES = ['EN', 'ES', 'FR', 'DE', 'IT', 'JP'];
+const ECHOES: EchoProfile[] = ['basement', 'stage', 'parking'];
+const ECHO_TR: Record<EchoProfile, string> = {
+  basement: 'Bodrum',
+  stage: 'Sahne',
+  parking: 'Otopark',
+};
 
 export default function NeuroImprint() {
   const { setTab } = useApp();
   const [lang, setLang] = useState('EN');
   const [level, setLevel] = useState<CEFR>('A1');
   const [mode, setMode] = useState<'words' | 'sentences' | 'both'>('both');
+  const [echo, setEcho] = useState<EchoProfile>('basement');
   const [running, setRunning] = useState(false);
   const [current, setCurrent] = useState<string[]>([]);
   const [setNo, setSetNo] = useState(0);
   const [min, setMin] = useState(42);
+  const [realReady, setRealReady] = useState(false);
   const runRef = useRef(0);
+
+  useEffect(() => { setRealReady(!!getEndpoint()); }, []);
 
   const start = async () => {
     if (running) return;
@@ -26,6 +39,7 @@ export default function NeuroImprint() {
       langId: lang,
       level,
       mode,
+      echo,
       setDurationMin: min,
       onSet: (info) => {
         setSetNo(info.index);
@@ -88,6 +102,24 @@ export default function NeuroImprint() {
         <button onClick={() => setMode('words')} className={chip(mode === 'words')}>Kelimeler</button>
         <button onClick={() => setMode('sentences')} className={chip(mode === 'sentences')}>Cümleler</button>
         <button onClick={() => setMode('both')} className={chip(mode === 'both')}>İkisi</button>
+      </div>
+
+      <div className="mb-2 flex items-center gap-2 font-mono text-[10px] tracking-widest text-white/40">
+        YANKI
+        <span className={`rounded-full px-2 py-0.5 text-[9px] ${realReady ? 'bg-emerald-500/20 text-emerald-200' : 'bg-amber-500/15 text-amber-200'}`}>
+          {realReady ? 'GERÇEK YANKI' : 'YAKLAŞIK'}
+        </span>
+      </div>
+      <div className="mb-3 flex flex-wrap gap-2">
+        {ECHOES.map((e) => (
+          <button key={e} onClick={() => setEcho(e)} className={chip(echo === e)}>{ECHO_TR[e]}</button>
+        ))}
+        <button
+          onClick={async () => { buzz(10); await engine.playEchoDemo(echo); }}
+          className="pressable inline-flex items-center gap-1.5 rounded-xl border border-cyan-400/30 bg-cyan-500/10 px-3 py-2 text-[12px] font-bold text-cyan-200"
+        >
+          <Waves className="h-3.5 w-3.5" /> YANKIYI DENE
+        </button>
       </div>
 
       <div className="mb-2 font-mono text-[10px] tracking-widest text-white/40">SET SÜRESİ</div>

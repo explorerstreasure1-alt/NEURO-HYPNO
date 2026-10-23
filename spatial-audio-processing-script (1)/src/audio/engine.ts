@@ -11,6 +11,9 @@
 // bu frekansları çok daha güçlü basar. Ayrıca kısa bir "thump" (düşük geçiren
 // gürültü patlaması) her nabızda perküsif bir vuru hissi ekler.
 
+import { EchoChain, type EchoProfile } from './echoChain';
+import { loadTtsBuffer, makeEchoDemoBuffer } from './tts';
+
 export type OutputMode = 'phones' | 'speaker';
 
 export interface EngineParams {
@@ -70,6 +73,9 @@ class HypnoEngine {
   limiter: DynamicsCompressorNode | null = null;
   analyser: AnalyserNode | null = null;
   analyserTime: AnalyserNode | null = null;
+
+  // Gerçek yankı zinciri (TTS AudioBuffer → Convolver)
+  echoChain: EchoChain | null = null;
 
   outputMode: OutputMode = 'phones';
   speakerProfile: CalibrationResult | null = null;
@@ -913,6 +919,65 @@ class HypnoEngine {
     if (this.master && this.ctx) {
       this.master.gain.setTargetAtTime(0.79, this.ctx.currentTime, 0.8);
     }
+  }
+
+  // ── GERÇEK YANKI ─────────────────────────────────────────────
+  private ensureEchoChain(profile: EchoProfile): EchoChain {
+    if (!this.echoChain && this.ctx) {
+      this.echoChain = new EchoChain(this.ctx, profile);
+    }
+    if (this.echoChain && this.echoChain.currentProfile !== profile) {
+      this.echoChain.setProfile(profile);
+    }
+    return this.echoChain!;
+  }
+
+  /**
+   * TTS'i AudioBuffer olarak alır, Convolver + ping-pong zincirinden geçirir.
+   * Sesin KENDİSİ yankılanır. Endpoint yoksa/başarısızsa Web Speech'e düşer.
+   */
+  async speakWithRealEcho(
+    text: string,
+    lang = 'tr-TR',
+    rate = 0.92,
+    echo: EchoProfile = 'basement',
+    endpoint?: string | null,
+  ): Promise<'echo' | 'fallback'> {
+    await this.ensure();
+    const ctx = this.ctx!;
+    await this.prepareSpeechScene(echo);
+
+    const buffer = await loadTtsBuffer(ctx, text, lang, endpoint);
+    if (!buffer) {
+      await this.speakLightWhisper(text, lang, rate, echo);
+      return 'fallback';
+    }
+
+    // Yatağı konuşma süresince kıs
+    this.master?.gain.setTargetAtTime(0.30, ctx.currentTime, 0.2);
+
+    const chain = this.ensureEchoChain(echo);
+    await chain.play(buffer, 1.0);
+
+    this.master?.gain.setTargetAtTime(0.79, ctx.currentTime, 0.8);
+    return 'echo';
+  }
+
+  /** Yankı zinciri testi: kelime değil, vokal benzeri örnek */
+  async playEchoDemo(echo: EchoProfile = 'basement') {
+    await this.ensure();
+    const ctx = this.ctx!;
+    await this.prepareSpeechScene(echo);
+    this.master?.gain.setTargetAtTime(0.30, ctx.currentTime, 0.2);
+
+    const buf = makeEchoDemoBuffer(ctx);
+    await this.ensureEchoChain(echo).play(buf, 0.9);
+
+    this.master?.gain.setTargetAtTime(0.79, ctx.currentTime, 0.8);
+  }
+
+  stopEcho() {
+    this.echoChain?.stopAll();
   }
 
   // Ses listesini garantiye al (Chrome'da ilk çağrıda boş döner)
