@@ -808,6 +808,30 @@ class HypnoEngine {
   getTime(data: Uint8Array<ArrayBuffer>) {
     this.analyserTime?.getByteTimeDomainData(data as unknown as Uint8Array<ArrayBuffer>);
   }
+
+  // Yabancı dil kelime/cümle okuma + hafif yankı
+  speakLightWhisper(text: string, lang = 'tr-TR', rate = 0.92) {
+    // Motoru hafif yankı moduna al
+    this.update({ wet: 48, whisperGain: 58, binauralGain: 30, masterGain: 88 });
+    this.setBinauralOn(true);
+    this.setWhisperOn(false);
+
+    const utter = new SpeechSynthesisUtterance(text);
+    utter.lang = lang;
+    utter.rate = rate;
+    utter.pitch = 0.95;
+    utter.volume = 0.85;
+
+    utter.onstart = () => {
+      if (this.whisperBus) this.whisperBus.gain.setTargetAtTime(0.6, this.ctx!.currentTime, 0.3);
+    };
+    utter.onend = () => {
+      if (this.whisperBus) this.whisperBus.gain.setTargetAtTime(0.35, this.ctx!.currentTime, 0.8);
+    };
+
+    speechSynthesis.cancel();
+    speechSynthesis.speak(utter);
+  }
 }
 
 export const engine = new HypnoEngine();
