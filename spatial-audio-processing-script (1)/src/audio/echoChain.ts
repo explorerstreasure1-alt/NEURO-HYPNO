@@ -142,31 +142,56 @@ export class EchoChain {
   /** Buffer'ı gerçek yankıdan geçirerek çalar; bitince resolve olur */
   play(buffer: AudioBuffer, gain = 1.0): Promise<void> {
     return new Promise((resolve) => {
-      const src = this.ctx.createBufferSource();
-      src.buffer = buffer;
-
-      const g = this.ctx.createGain();
-      g.gain.value = gain;
-
-      src.connect(g);
-      g.connect(this.input);
-
-      src.onended = () => {
-        try { src.disconnect(); g.disconnect(); } catch { /* noop */ }
-        resolve();
-      };
-
-      src.start();
+      this.startSource(buffer, this.ctx.currentTime, gain, () => resolve());
     });
   }
 
-  /** Çalan kaynağı kes */
+  /**
+   * Buffer'ı ileri bir zamanda çalar (Web Audio saati).
+   * Ekran kapalıyken setTimeout kısıtlansa bile ses devam eder.
+   * @returns buffer süresi (saniye)
+   */
+  schedule(buffer: AudioBuffer, when: number, gain = 1.0): number {
+    this.startSource(buffer, Math.max(when, this.ctx.currentTime), gain);
+    return buffer.duration;
+  }
+
+  private startSource(buffer: AudioBuffer, when: number, gain: number, onEnd?: () => void) {
+    const src = this.ctx.createBufferSource();
+    src.buffer = buffer;
+
+    const g = this.ctx.createGain();
+    g.gain.value = gain;
+
+    src.connect(g);
+    g.connect(this.input);
+
+    const node = { src, g };
+    this.active.add(node);
+
+    src.onended = () => {
+      this.active.delete(node);
+      try { src.disconnect(); g.disconnect(); } catch { /* noop */ }
+      onEnd?.();
+    };
+
+    src.start(when);
+  }
+
+  private active = new Set<{ src: AudioBufferSourceNode; g: GainNode }>();
+
+  /** Çalan TÜM kaynakları yumuşakça kes (pause/stop sırasında ses sızmasın) */
   stopAll() {
-    // BufferSource'lar kendi onended'leriyle temizlenir; limiter'ı sustur
-    this.limiter.threshold.setTargetAtTime(-60, this.ctx.currentTime, 0.02);
-    setTimeout(() => {
-      this.limiter.threshold.setTargetAtTime(-6, this.ctx.currentTime, 0.05);
-    }, 120);
+    const t = this.ctx.currentTime;
+    for (const { src, g } of this.active) {
+      try {
+        g.gain.cancelScheduledValues(t);
+        g.gain.setValueAtTime(g.gain.value, t);
+        g.gain.linearRampToValueAtTime(0, t + 0.08);
+        src.stop(t + 0.09);
+      } catch { /* zaten durmuş */ }
+    }
+    this.active.clear();
   }
 
   get currentProfile() {

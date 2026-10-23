@@ -11,6 +11,10 @@ import { stageIndexAt, stageTimeLeft, resolveStage, cycleLapsAt, STAGE_DURATION_
 import type { ResolvedStage } from './data/stages';
 import { newSrsCard, reviewSrsCard, dueCards, srsKey } from './data/srs';
 import type { SrsCard, SrsDeck } from './data/srs';
+import { startWhisperSession, stopWhisperSession } from './audio/whisperSession';
+import { getEndpoint } from './audio/ttsSettings';
+import { startKeepAlive, stopKeepAlive, setKeepAliveHandlers, updateKeepAliveMeta } from './audio/keepAlive';
+import type { CEFR } from './data/lexicon';
 
 export type Tab = 'home' | 'explore' | 'stats' | 'profile' | 'imprint' | 'test';
 
@@ -115,6 +119,7 @@ interface AppCtx {
   stopSession: () => void;
   elapsed: number; totalSecs: number; remaining: number; progress: number;
   whisperArmed: boolean; whisperDelaySec: number; whisperCountdown: number; whisperLiveIdx: number;
+  whisperReading: string; whisperReal: boolean; startWhisperNow: () => void;
   whisperRampProgress: number; whisperLevelPct: number; whisperFullAtSec: number;
   stage: ResolvedStage; stageCount: number; stageDurationSec: number; stageTimeLeftSec: number; cycleLaps: number;
   stageIsManual: boolean; jumpToStage: (idx: number) => void; setStageAuto: () => void;
@@ -236,6 +241,10 @@ export function AppProvider({ children }: { children: ReactNode }) {
   // ── gecikmeli fısıltı: yabancı dil cümle kalıpları 10dk sonra başlar ──
   const [whisperArmed, setWhisperArmed] = useState(false);
   const [whisperLiveIdx, setWhisperLiveIdx] = useState(0);
+  const [whisperReading, setWhisperReading] = useState('');
+  const [whisperReal, setWhisperReal] = useState(false);
+  const whisperRampRef = useRef(1);
+  const whisperForceRef = useRef(0);
 
   const [toasts, setToasts] = useState<Toast[]>([]);
   const [recap, setRecap] = useState<Recap | null>(null);
@@ -609,12 +618,57 @@ export function AppProvider({ children }: { children: ReactNode }) {
     if (!playing || induction || whisperArmed) return;
     if (elapsed >= whisperDelaySec) {
       engine.update({ whisperGain: 0 });
+      whisperForceRef.current = 0;
       setWhisperArmed(true);
-      engine.setWhisperOn(true);
+      // Prosedürel "fısıltı" (anlamsız gürültü) KAPALI — artık gerçek kelime okunuyor.
+      engine.setWhisperOn(false);
       buzz([20, 40, 20]);
       pushToast(`🗣️ Fısıltı mikro seviyede başladı — ${current.langTr} kelime/cümle döngüsü yavaşça yükselecek`, 'theta');
     }
   }, [playing, induction, whisperArmed, elapsed, whisperDelaySec, current.langTr, pushToast]);
+
+  /** 10 dk beklemeden okumayı hemen başlat (test + kullanıcı kontrolü) */
+  const startWhisperNow = useCallback(() => {
+    engine.update({ whisperGain: 0 });
+    engine.setWhisperOn(false);
+    whisperForceRef.current = 0.75; // duyulur test seviyesi
+    setWhisperArmed(true);
+    buzz([20, 40, 20]);
+    pushToast(`🗣️ ${current.langTr} okuma hemen başlatıldı · 3 tekrar · yankılı`, 'theta');
+  }, [current.langTr, pushToast]);
+
+  // ── GERÇEK sesli okuma: 10. dakikadan sonra seçilen dilde kelime + cümle ──
+  // (Önceki sürümde sadece prosedürel gürültü çalışıyordu; sesli yankı hiç devreye girmiyordu.)
+  useEffect(() => {
+    if (!whisperArmed || !playing) return;
+
+    const lv = (['A1', 'A2', 'B1', 'B2', 'C1'] as CEFR[]).includes(current.level as CEFR)
+      ? (current.level as CEFR)
+      : 'A1';
+
+    startWhisperSession({
+      langId: current.lang,
+      level: lv,
+      mode: 'both',
+      repeat: 3,
+      endpoint: getEndpoint(),
+      getVolume: () => Math.max(whisperForceRef.current, whisperRampRef.current),
+      onLine: ({ line, real }) => {
+        setWhisperReading(line);
+        setWhisperReal(real);
+      },
+    });
+
+    return () => {
+      stopWhisperSession();
+      setWhisperReading('');
+    };
+  }, [whisperArmed, playing, current.lang, current.level]);
+
+  // 10 dk rampasını okuyucuya anlık aktar (efekti yeniden başlatmadan)
+  useEffect(() => {
+    whisperRampRef.current = whisperRampK;
+  }, [whisperRampK]);
 
   // fısıltı aktifken hangi cümle kalıbının "okunduğunu" döngüsel göster (~9sn/cümle)
   useEffect(() => {
@@ -807,6 +861,26 @@ export function AppProvider({ children }: { children: ReactNode }) {
     } catch { /* yok */ }
   }, []);
 
+  // ── EKRAN KAPALI / ARKA PLAN: medya oturumu + wake lock + Android servisi ──
+  useEffect(() => {
+    setKeepAliveHandlers({
+      onPause: () => { if (playing) togglePlayRef.current(); },
+      onPlay: () => { if (!playing) togglePlayRef.current(); },
+    });
+  }, [playing]);
+
+  useEffect(() => {
+    if (playing) {
+      startKeepAlive({ title: current.title, artist: `${current.langTr} · ${current.levelTr}` });
+    } else {
+      stopKeepAlive();
+    }
+  }, [playing, current.title, current.langTr, current.levelTr]);
+
+  useEffect(() => {
+    if (playing) updateKeepAliveMeta({ title: current.title, artist: `${current.langTr} · ${current.levelTr}` });
+  }, [playing, current.title, current.langTr, current.levelTr]);
+
   // ── ritüel / günlük / quiz ──
   const toggleRitual = useCallback((id: string) => {
     buzz(10);
@@ -935,7 +1009,7 @@ export function AppProvider({ children }: { children: ReactNode }) {
     tab, setTab, playerOpen, setPlayerOpen,
     params, patch, applyPreset,
     playing, current, selectSession, togglePlay, stopSession,
-    whisperArmed, whisperDelaySec, whisperCountdown, whisperLiveIdx,
+    whisperArmed, whisperDelaySec, whisperCountdown, whisperLiveIdx, whisperReading, whisperReal, startWhisperNow,
     whisperRampProgress, whisperLevelPct, whisperFullAtSec,
     stage, stageCount: STAGE_COUNT, stageDurationSec: STAGE_DURATION_SEC, stageTimeLeftSec, cycleLaps,
     stageIsManual: stageManualIdx !== null, jumpToStage, setStageAuto,

@@ -84,6 +84,64 @@ Toplam: **180 kelime + 180 cümle kalıbı** (her dil/seviye 6 kelime + 6 kalıp
 * Cümle modunda `generateRhymeSet()` 4 kalıp + 4 kelime birleştirir.
 * Her satır varsayılan **3 kez** okunur (`repeat: 3`), tekrarlar arası 700 ms, satırlar arası 2.2 s.
 
+## 4c. 10. Dakika Yankılı Okuma — KÖK NEDEN DÜZELTMESİ
+
+**Şikâyet:** "10 dakika geçiyor, frekanstan sonra dile girmiyor."
+
+**Kök neden:** 10. dakika tetikleyicisi yalnızca `engine.setWhisperOn(true)` çağırıyordu.
+Bu, **anlamsız prosedürel gürültü** üretiyordu; gerçek kelime/cümle hiç okunmuyordu.
+Yeni `whisperSession.ts` hiçbir yerden çağrılmıyordu.
+
+**Düzeltme (yeni akış):**
+
+```
+oynatma başlar
+  → 10. dk (kısa seanslarda ölçekli) tetik
+  → engine.setWhisperOn(false)              (gürültü kapatıldı)
+  → startWhisperSession({ langId, level })  (GERÇEK okuma)
+       → CEFR havuzundan 4'lü set
+       → her satır 3 kez
+       → TTS → AudioBuffer → Convolver + ping-pong (gerçek yankı)
+       → endpoint yoksa Web Speech (swell) yedeği
+```
+
+* Seçilen dil otomatik: `current.lang` → `en-US / es-ES / fr-FR / de-DE / it-IT / ja-JP`
+* Seviye: oturumun CEFR seviyesi (A1→C1), hız `LEVEL_RATE × dil çarpanı`
+* Dil bazlı kalite: `LANG_TUNING` (DE 0.94×, JP 0.93×, FR 0.98×; kısa yankı `stage`)
+* 10 dk rampı gerçek sese uygulanıyor (`getVolume`), alt sınır %10 (Android'de tam sessize düşmesin)
+* Player'a **"HEMEN DENE · 10 DK BEKLEMEDEN"** düğmesi eklendi
+* Canlı satır göstergesi: gerçekten çalan satır + "gerçek yankı" / "cihaz sesi yedeği"
+
+### Ek kalite düzeltmeleri (aynı tur)
+
+| # | Sorun | Düzeltme |
+|---|-------|----------|
+| 1 | Aynı satır 3 kez okunurken TTS 3 kez indiriliyordu (gecikme + kota) | `tts.ts` buffer önbelleği |
+| 2 | 180+ karakter satırlarda TTS 200 karakter sınırına takılıyordu | cümle/kelime sınırından parçalama + tek buffer'da birleştirme |
+| 3 | Endpoint çökünce her satırda 2×9 sn bekleme | devre kesici (60 sn) + 6.5 sn timeout |
+| 4 | Konuşma bitince `master` hep 0.79'a dönüyordu (seans ayarını eziyordu) | `restoreMaster()` — önceki seviyeye döner |
+| 5 | Okuma sahnesi seansın teta/binaural ayarını eziyordu | `preserveScene=true` |
+| 6 | `stopAll()` konuşmayı/yankıyı kesmiyordu | speechSynthesis.cancel + echo stop + restore |
+| 7 | Düşük kaliteli ses (eSpeak/compact) seçilebiliyordu | Google/Natural/Neural önceliği, eSpeak cezası |
+| 8 | Endpoint'te `{text}` yoksa metin gitmiyordu | sorgu parametresi otomatik ekleniyor |
+| 9 | `stopAll()` yankı kaynaklarını durdurmuyordu (pause'da ses sızıyordu) | aktif kaynak seti + yumuşak fade-out |
+
+## 4d. EKRAN KAPALI / ARKA PLAN
+
+**Hedef:** telefonun ekranı kapansa da frekans + yankılı okuma devam etsin.
+
+Web tarafı:
+* `keepAlive.ts` — sessiz ama gerçekten çalan `<audio loop>` (medya oturumu canlı), MediaSession meta verisi + kilit ekranı play/pause, Screen Wake Lock.
+* `whisperSession.ts` — gerçek yankı yolunda ses **Web Audio saatiyle önceden zamanlanır** (`AudioBufferSourceNode.start(when)`). Böylece arka planda `setTimeout` kısıtlansa bile okuma sürer.
+* Yatak (frekans) `duckBed(süre)` ile konuşma boyunca kısılır, sonra geri yükselir.
+
+Android tarafı (`usta-download`):
+* `PlaybackForegroundService` — `foregroundServiceType="mediaPlayback"`, süresiz `PARTIAL_WAKE_LOCK`, sürekli bildirim.
+* `WebAppActivity` — `mediaPlaybackRequiresUserGesture=false`, `onPause`'da WebView **durdurulmuyor**, `AndroidBridge.startPlayback()/stopPlayback()` JS köprüsü.
+* Manifest: `FOREGROUND_SERVICE_MEDIA_PLAYBACK` izni + servis tanımı.
+
+Bilinen sınır: Web Speech (cihaz sesi) yedeği arka planda Android tarafından kısılabilir; **gerçek yankı yolu (TTS endpoint)** arka planda güvenilirdir.
+
 ## 5. Sonraki Adımlar (öneri)
 
 1. `onboundary` ile kelime bazlı vurgu ve zamanlama.

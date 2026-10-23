@@ -702,6 +702,12 @@ class HypnoEngine {
     if (!delayWhisper) this.setWhisperOn(true);
   }
   async stopAll() {
+    // Konuşma + yankı kuyruğu da kesilsin (önceki sürümde ses devam ediyordu)
+    try {
+      if (typeof speechSynthesis !== 'undefined') speechSynthesis.cancel();
+    } catch { /* noop */ }
+    this.stopEcho();
+    this.restoreMaster();
     this.setBinauralOn(false);
     this.setWhisperOn(false);
   }
@@ -816,29 +822,46 @@ class HypnoEngine {
     this.analyserTime?.getByteTimeDomainData(data as unknown as Uint8Array<ArrayBuffer>);
   }
 
-  /** Okuma sahnesini hazırlar: yankı profili + arkada derin delta */
-  private async prepareSpeechScene(echo: string) {
+  /**
+   * Okuma sahnesini hazırlar.
+   * preserveScene=true ise mevcut seans parametrelerine DOKUNMAZ (sadece yatağı kısar).
+   * Bu, 10. dakikada devreye giren fısıltının seansın teta/gain ayarlarını
+   * ezmesini engeller (tutarlılık düzeltmesi).
+   */
+  private async prepareSpeechScene(echo: string, preserveScene = false) {
     await this.ensure();
 
-    const profiles: Record<string, { wet: number; decay: number }> = {
-      basement: { wet: 45, decay: 2.2 },
-      stage: { wet: 38, decay: 1.8 },
-      parking: { wet: 48, decay: 2.5 },
-    };
-    const p = profiles[echo] ?? profiles.basement;
+    if (!preserveScene) {
+      const profiles: Record<string, { wet: number; decay: number }> = {
+        basement: { wet: 45, decay: 2.2 },
+        stage: { wet: 38, decay: 1.8 },
+        parking: { wet: 48, decay: 2.5 },
+      };
+      const p = profiles[echo] ?? profiles.basement;
 
-    // Arka planda derin delta; konuşmayı örtmeyecek kadar düşük
-    this.setEntrainment(1.5, 0.5);
-    this.update({ wet: p.wet, whisperGain: 0, binauralGain: 8, masterGain: 88 });
-    this.setDecay(p.decay);
-    this.setBinauralOn(true);
-    this.setWhisperOn(false);
+      // Arka planda derin delta; konuşmayı örtmeyecek kadar düşük
+      this.setEntrainment(1.5, 0.5);
+      this.update({ wet: p.wet, whisperGain: 0, binauralGain: 8, masterGain: 88 });
+      this.setDecay(p.decay);
+      this.setBinauralOn(true);
+      this.setWhisperOn(false);
+    }
 
-    // Konuşma süresince yatağı kıs
+    // Konuşma süresince yatağı kıs (önceki seviyeyi sakla)
     if (this.master && this.ctx) {
+      this.preSpeechMaster = this.master.gain.value || 0.79;
       this.master.gain.setTargetAtTime(0.30, this.ctx.currentTime, 0.2);
     }
   }
+
+  /** Konuşma sonrası yatağı eski seviyesine döndür */
+  private restoreMaster() {
+    if (this.master && this.ctx) {
+      this.master.gain.setTargetAtTime(this.preSpeechMaster, this.ctx.currentTime, 0.8);
+    }
+  }
+
+  private preSpeechMaster = 0.79;
 
   /** Tek bir utterance'ı Promise olarak okur (volume kontrol edilebilir) */
   private speakRaw(text: string, lang: string, rate: number, volume = 1.0): Promise<void> {
@@ -847,8 +870,23 @@ class HypnoEngine {
 
       const voices = speechSynthesis.getVoices();
       const base = lang.split('-')[0].toLowerCase();
+      const exact = voices.filter((v) => v.lang.toLowerCase() === lang.toLowerCase());
+      const sameLang = voices.filter((v) => v.lang.toLowerCase().startsWith(base));
+
+      // Kaliteli ses önceliği: Google/Neural/Natural > diğer uzak sesler > yerel
+      const score = (v: SpeechSynthesisVoice) => {
+        const n = v.name.toLowerCase();
+        let s = 0;
+        if (n.includes('google')) s += 50;
+        if (n.includes('natural') || n.includes('neural')) s += 45;
+        if (n.includes('microsoft')) s += 20;
+        if (n.includes('espeak') || n.includes('compact')) s -= 60;
+        if (!v.localService) s += 5;
+        return s;
+      };
+      const pool = exact.length ? exact : sameLang;
       const voice =
-        voices.find((v) => v.lang.toLowerCase().startsWith(base)) ??
+        [...pool].sort((a, b) => score(b) - score(a))[0] ??
         voices.find((v) => v.lang.toLowerCase().startsWith('en')) ??
         null;
 
@@ -888,18 +926,23 @@ class HypnoEngine {
 
     await this.speakRaw(text, lang, rate, 1.0);
 
-    // Yatağı geri aç
-    if (this.master && this.ctx) {
-      this.master.gain.setTargetAtTime(0.79, this.ctx.currentTime, 0.8);
-    }
+    this.restoreMaster();
   }
 
   /**
    * Kısıktan yükseğe → yüksekten kısığa "swell" okuma.
    * Cümleyi kelimelere böler, her kelimeyi artan/azalan sesle okur.
+   * volume: 0-1 dış ölçek (10 dk rampası için).
    */
-  async speakSwell(text: string, lang = 'tr-TR', rate = 0.92, echo = 'basement') {
-    await this.prepareSpeechScene(echo);
+  async speakSwell(
+    text: string,
+    lang = 'tr-TR',
+    rate = 0.92,
+    echo = 'basement',
+    volume = 1.0,
+    preserveScene = false,
+  ) {
+    await this.prepareSpeechScene(echo, preserveScene);
     await this.loadVoices();
 
     speechSynthesis.cancel();
@@ -909,16 +952,15 @@ class HypnoEngine {
     const n = words.length;
 
     for (let i = 0; i < n; i++) {
-      // 0.35 → 1.0 → 0.35 sinüs zarfı
+      // 0.35 → 1.0 → 0.35 sinüs zarfı × dış ölçek
       const pos = n <= 1 ? 0.5 : i / (n - 1);
-      const vol = 0.35 + 0.65 * Math.sin(Math.PI * pos);
+      const env = 0.35 + 0.65 * Math.sin(Math.PI * pos);
+      const vol = Math.max(0, Math.min(1, env * volume));
       await this.speakRaw(words[i], lang, rate, vol);
       await new Promise((r) => setTimeout(r, 90));
     }
 
-    if (this.master && this.ctx) {
-      this.master.gain.setTargetAtTime(0.79, this.ctx.currentTime, 0.8);
-    }
+    this.restoreMaster();
   }
 
   // ── GERÇEK YANKI ─────────────────────────────────────────────
@@ -942,24 +984,23 @@ class HypnoEngine {
     rate = 0.92,
     echo: EchoProfile = 'basement',
     endpoint?: string | null,
+    volume = 1.0,
+    preserveScene = false,
   ): Promise<'echo' | 'fallback'> {
     await this.ensure();
     const ctx = this.ctx!;
-    await this.prepareSpeechScene(echo);
+    await this.prepareSpeechScene(echo, preserveScene);
 
     const buffer = await loadTtsBuffer(ctx, text, lang, endpoint);
     if (!buffer) {
-      await this.speakLightWhisper(text, lang, rate, echo);
+      await this.speakSwell(text, lang, rate, echo, volume, preserveScene);
       return 'fallback';
     }
 
-    // Yatağı konuşma süresince kıs
-    this.master?.gain.setTargetAtTime(0.30, ctx.currentTime, 0.2);
-
     const chain = this.ensureEchoChain(echo);
-    await chain.play(buffer, 1.0);
+    await chain.play(buffer, Math.max(0, Math.min(1, volume)));
 
-    this.master?.gain.setTargetAtTime(0.79, ctx.currentTime, 0.8);
+    this.restoreMaster();
     return 'echo';
   }
 
@@ -973,11 +1014,41 @@ class HypnoEngine {
     const buf = makeEchoDemoBuffer(ctx);
     await this.ensureEchoChain(echo).play(buf, 0.9);
 
-    this.master?.gain.setTargetAtTime(0.79, ctx.currentTime, 0.8);
+    this.restoreMaster();
   }
 
   stopEcho() {
     this.echoChain?.stopAll();
+  }
+
+  // ── Arka plan (ekran kapalı) zamanlaması ─────────────────────
+  /** AudioContext'i garanti eder (kullanıcı jesti sonrası çağrılmalı). */
+  async ensureContext(): Promise<AudioContext> {
+    await this.ensure();
+    return this.ctx!;
+  }
+
+  getContext(): AudioContext | null {
+    return this.ctx;
+  }
+
+  /**
+   * TTS buffer'ını Web Audio saatiyle ileri bir ana yerleştirir.
+   * setTimeout kısıtlamasından (ekran kapalı / arka plan) etkilenmez.
+   */
+  scheduleEchoBuffer(buffer: AudioBuffer, when: number, echo: EchoProfile, volume = 1.0): number {
+    const chain = this.ensureEchoChain(echo);
+    return chain.schedule(buffer, when, Math.max(0, Math.min(1, volume)));
+  }
+
+  /** Yatağı belirtilen süre boyunca kısar, sonra eski seviyeye döndürür. */
+  duckBed(seconds: number) {
+    if (!this.master || !this.ctx) return;
+    const t = this.ctx.currentTime;
+    this.preSpeechMaster = this.master.gain.value || 0.79;
+    this.master.gain.cancelScheduledValues(t);
+    this.master.gain.setTargetAtTime(0.30, t, 0.2);
+    this.master.gain.setTargetAtTime(this.preSpeechMaster, t + Math.max(0.3, seconds), 0.8);
   }
 
   // Ses listesini garantiye al (Chrome'da ilk çağrıda boş döner)

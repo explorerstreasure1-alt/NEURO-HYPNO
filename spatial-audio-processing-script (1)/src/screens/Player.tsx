@@ -18,7 +18,7 @@ export default function Player() {
     sleepTimerMin, setSleepTimer, smartWake, setSmartWake, autoPhase, setAutoPhase,
     liveWord, setTab, startQuiz, setBuilderOpen,
     outputMode, induction, indPhase, taperActive,
-    whisperArmed, whisperDelaySec, whisperCountdown, whisperLiveIdx,
+    whisperArmed, whisperDelaySec, whisperCountdown, whisperLiveIdx, whisperReading, whisperReal, startWhisperNow,
     whisperRampProgress, whisperLevelPct, whisperFullAtSec,
     stage, stageCount, stageTimeLeftSec, stageDurationSec, cycleLaps,
     stageIsManual, jumpToStage, setStageAuto,
@@ -171,12 +171,18 @@ export default function Player() {
                     <b className="text-white/70">{current.langTr}</b> kelime ve cümleleri aniden başlamaz;
                     neredeyse sessizden, yankılı fısıltıyla yavaşça yükselir.
                   </p>
+                  <button
+                    onClick={startWhisperNow}
+                    className="pressable mt-3 w-full rounded-xl border border-indigo-400/35 bg-indigo-500/15 py-2.5 font-mono text-[11px] tracking-widest text-indigo-100"
+                  >
+                    HEMEN DENE · 10 DK BEKLEMEDEN
+                  </button>
                 </div>
               ) : (
                 <div className="anim-fadeUp overflow-hidden rounded-3xl border border-indigo-400/30 bg-gradient-to-br from-indigo-500/15 to-fuchsia-500/10 p-4">
                   <div className="flex items-center gap-2 font-mono text-[10px] tracking-[0.2em] text-indigo-200">
                     <Mic2 className="h-3.5 w-3.5" /> CANLI FISILTI · {current.langTr.toUpperCase()} KELİME/CÜMLE
-                    <span className="ml-auto flex items-center gap-1 text-emerald-300"><span className="h-1.5 w-1.5 rounded-full bg-emerald-400 animate-pulse" /> YANKILI</span>
+                    <span className="ml-auto flex items-center gap-1 text-emerald-300"><span className="h-1.5 w-1.5 rounded-full bg-emerald-400 animate-pulse" /> {whisperReading ? 'SESLİ · YANKILI' : 'HAZIRLANIYOR'}</span>
                   </div>
                   <div className="mt-3">
                     <div className="flex justify-between font-mono text-[9px] text-white/45">
@@ -186,11 +192,14 @@ export default function Player() {
                     <div className="mt-1.5"><Bar pct={whisperRampProgress * 100} color="#a78bfa" h={5} /></div>
                   </div>
                   {(() => {
-                    const ph = stage.sentences[whisperLiveIdx % stage.sentences.length];
+                    const live = whisperReading || stage.sentences[whisperLiveIdx % stage.sentences.length].pattern;
+                    const liveGloss = whisperReading
+                      ? (whisperReal ? 'gerçek yankı · 3 tekrar' : 'cihaz sesi yedeği · 3 tekrar')
+                      : stage.sentences[whisperLiveIdx % stage.sentences.length].gloss;
                     return (
-                      <div key={`${stage.idx}-${whisperLiveIdx}`} className="anim-ticker mt-2.5">
-                        <div className="font-serif text-[19px] italic leading-snug" style={{ color: current.accent }}>{ph.pattern}</div>
-                        <div className="mt-1 text-[12.5px] text-white/65">{ph.gloss}</div>
+                      <div key={`${stage.idx}-${whisperLiveIdx}-${whisperReading}`} className="anim-ticker mt-2.5">
+                        <div className="font-serif text-[19px] italic leading-snug" style={{ color: current.accent }}>{live}</div>
+                        <div className="mt-1 text-[12.5px] text-white/65">{liveGloss}</div>
                         <div className="mt-1 font-mono text-[9.5px] text-white/35">AAAA kafiye: {stage.rhyme} · aşama {stage.idx + 1}/{stageCount}</div>
                       </div>
                     );
