@@ -1,75 +1,74 @@
-import { phrasesOf, type Phrase } from './phrases';
+import {
+  CEFR_ORDER,
+  LEVEL_RATE,
+  wordsOf,
+  phraseBankOf,
+  type CEFR,
+  type Entry,
+} from './lexicon';
 
-export type CEFR = 'A1' | 'A2' | 'B1' | 'B2' | 'C1';
+export { CEFR_ORDER, LEVEL_RATE };
+export type { CEFR, Entry };
 
 export interface RhymeSet {
   level: CEFR;
   lines: string[];
   gloss: string[];
+  words: string[];
 }
 
-export const CEFR_ORDER: CEFR[] = ['A1', 'A2', 'B1', 'B2', 'C1'];
-
-/** CEFR seviyesine göre konuşma hızı (dil uzmanı ayarı) */
-export const LEVEL_RATE: Record<CEFR, number> = {
-  A1: 0.78,
-  A2: 0.85,
-  B1: 0.92,
-  B2: 0.98,
-  C1: 1.02,
-};
-
-/**
- * Seviyeye uygun kalıp havuzu.
- * Veri setindeki 6 kalıp zorluk sırasına göre indekslenir:
- * 0-1 temel, 2-3 orta, 4-5 ileri.
- */
-const LEVEL_POOL: Record<CEFR, number[]> = {
-  A1: [0, 1, 3],
-  A2: [0, 1, 2, 3],
-  B1: [1, 2, 3, 4],
-  B2: [2, 3, 4, 5],
-  C1: [3, 4, 5],
-};
-
-function pickPool(langId: string, level: CEFR): Phrase[] {
-  const all = phrasesOf(langId);
-  const idxs = LEVEL_POOL[level] ?? LEVEL_POOL.A1;
-  const pool = idxs.map((i) => all[i % all.length]).filter(Boolean);
-  return pool.length ? pool : all;
-}
-
-/** Her çalıştırmada farklı 4'lü kafiye (tekrarsız satırlar) */
-export function generateRhymeSet(langId: string, level: CEFR, seed?: number): RhymeSet {
-  const rnd = mulberry32(seed ?? Date.now());
-  const pool = pickPool(langId, level);
-
-  const used = new Set<number>();
-  const four: Phrase[] = [];
-  let guard = 0;
-  while (four.length < 4 && guard < 200) {
-    guard++;
-    const i = Math.floor(rnd() * pool.length);
-    if (used.has(i)) continue;
-    used.add(i);
-    four.push(pool[i]);
-  }
-  // Havuz 4'ten küçükse tekrar doldur
-  while (four.length < 4) four.push(pool[four.length % pool.length]);
-
-  return {
-    level,
-    lines: four.map((p) => p.pattern.replace('___', 'usta')),
-    gloss: four.map((p) => p.gloss.replace('___', 'usta')),
-  };
-}
-
-/** Mini PRNG — deterministik tekrar üretim */
 function mulberry32(a: number) {
   return function () {
     let t = (a += 0x6d2b79f5);
     t = Math.imul(t ^ (t >>> 15), t | 1);
     t ^= t + Math.imul(t ^ (t >>> 7), t | 61);
     return ((t ^ (t >>> 14)) >>> 0) / 4294967296;
+  };
+}
+
+function pickUnique<T>(arr: T[], count: number, rnd: () => number): T[] {
+  if (arr.length === 0) return [];
+  const pool = [...arr];
+  const out: T[] = [];
+  while (out.length < count) {
+    if (pool.length === 0) pool.push(...arr); // havuz küçükse başa dön
+    const i = Math.floor(rnd() * pool.length);
+    out.push(pool.splice(i, 1)[0]);
+  }
+  return out;
+}
+
+/**
+ * Her çalıştırmada farklı 4'lü set.
+ * Kalıplar seviyeye uygun; boşluklar aynı seviyenin kelimeleriyle doldurulur.
+ */
+export function generateRhymeSet(langId: string, level: CEFR, seed?: number): RhymeSet {
+  const rnd = mulberry32(seed ?? Date.now());
+
+  const phrases = pickUnique(phraseBankOf(langId, level), 4, rnd);
+  const words = pickUnique(wordsOf(langId, level), 4, rnd);
+
+  const lines = phrases.map((p: Entry, i) => {
+    const w = words[i % words.length];
+    return p.text.includes('___') ? p.text.replace('___', w.text) : `${p.text} · ${w.text}`;
+  });
+
+  const gloss = phrases.map((p: Entry, i) => {
+    const w = words[i % words.length];
+    return p.gloss.includes('___') ? p.gloss.replace('___', w.gloss) : `${p.gloss} · ${w.gloss}`;
+  });
+
+  return { level, lines, gloss, words: words.map((w) => w.text) };
+}
+
+/** Sadece kelime modu için 4'lü set */
+export function generateWordSet(langId: string, level: CEFR, seed?: number): RhymeSet {
+  const rnd = mulberry32(seed ?? Date.now());
+  const words = pickUnique(wordsOf(langId, level), 4, rnd);
+  return {
+    level,
+    lines: words.map((w) => w.text),
+    gloss: words.map((w) => w.gloss),
+    words: words.map((w) => w.text),
   };
 }

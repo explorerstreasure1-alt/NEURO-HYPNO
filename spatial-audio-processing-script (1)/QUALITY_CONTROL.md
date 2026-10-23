@@ -62,6 +62,28 @@ Yankı profilleri (gerçek IR):
 Devreye alma: Vercel'de proje kökü uygulama klasörü olmalı ki `/api/tts` yayınlansın.
 Yerelde test için: `npx vercel dev` veya Test ekranındaki endpoint alanına kendi URL'ni gir.
 
+## 4b. CEFR Yeterlilik Denetimi (dil uzmanı)
+
+Eski durum: dil başına yalnızca 6 kalıp, seviye ayrımı yok — **yetersizdi**.
+Yeni durum: `src/data/lexicon.ts` + `src/data/lexiconExtra.ts`
+
+| Dil | A1 | A2 | B1 | B2 | C1 | Toplam |
+|---|---|---|---|---|---|---|
+| İngilizce | 6+6 | 6+6 | 6+6 | 6+6 | 6+6 | 60 |
+| İspanyolca | 6+6 | 6+6 | 6+6 | 6+6 | 6+6 | 60 |
+| Fransızca | 6+6 | 6+6 | 6+6 | 6+6 | 6+6 | 60 |
+| Almanca | 6+6 | 6+6 | 6+6 | 6+6 | 6+6 | 60 |
+| İtalyanca | 6+6 | 6+6 | 6+6 | 6+6 | 6+6 | 60 |
+| Japonca | 6+6 | 6+6 | 6+6 | 6+6 | 6+6 | 60 |
+
+Toplam: **180 kelime + 180 cümle kalıbı** (her dil/seviye 6 kelime + 6 kalıp).
+4'lü set için kombinasyon: C(6,4) = **15 farklı kalıp grubu** × kelime eşleşmeleri.
+
+* Kalıplardaki `___` boşlukları **aynı seviyenin** kelimeleriyle doldurulur (pedagojik doğruluk).
+* Kelime modunda `generateWordSet()` 4 kelime + Türkçe karşılık üretir.
+* Cümle modunda `generateRhymeSet()` 4 kalıp + 4 kelime birleştirir.
+* Her satır varsayılan **3 kez** okunur (`repeat: 3`), tekrarlar arası 700 ms, satırlar arası 2.2 s.
+
 ## 5. Sonraki Adımlar (öneri)
 
 1. `onboundary` ile kelime bazlı vurgu ve zamanlama.

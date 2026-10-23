@@ -1,5 +1,5 @@
 import { engine } from './engine';
-import { generateRhymeSet, LEVEL_RATE, type CEFR } from '../data/rhymes';
+import { generateRhymeSet, generateWordSet, LEVEL_RATE, type CEFR } from '../data/rhymes';
 import { rampToPhase } from './hypnagogic';
 import { getEndpoint } from './ttsSettings';
 import type { EchoProfile } from './echoChain';
@@ -10,10 +10,11 @@ export interface ImprintOptions {
   langId?: string;
   level?: CEFR;
   mode?: ImprintMode;
-  setDurationMin?: number; // her 4'lü setin süresi
+  setDurationMin?: number; // her setin süresi (dk)
+  repeat?: number;         // her satır kaç kez okunur (varsayılan 3)
   echo?: EchoProfile;
   realEcho?: boolean;      // TTS → Convolver (gerçek yankı)
-  onSet?: (info: { index: number; lines: string[]; level: CEFR }) => void;
+  onSet?: (info: { index: number; lines: string[]; gloss: string[]; level: CEFR }) => void;
   onMode?: (mode: 'echo' | 'fallback') => void;
 }
 
@@ -28,8 +29,9 @@ let runToken = 0;
 /** Devam eden imprint döngüsünü durdurur */
 export function stopNeuroImprint() {
   runToken++;
-  speechSynthesis?.cancel();
+  if (typeof speechSynthesis !== 'undefined') speechSynthesis.cancel();
   engine.setWhisperOn(false);
+  engine.stopEcho();
 }
 
 export async function startNeuroImprint(opts: ImprintOptions = {}) {
@@ -38,6 +40,7 @@ export async function startNeuroImprint(opts: ImprintOptions = {}) {
     level = 'A1',
     mode = 'both',
     setDurationMin = 42,
+    repeat = 3,
     echo = 'basement',
     realEcho = true,
     onSet,
@@ -62,32 +65,40 @@ export async function startNeuroImprint(opts: ImprintOptions = {}) {
   let index = 0;
   while (myToken === runToken) {
     index++;
-    const set = generateRhymeSet(langId, level, Date.now() + index * 7919);
-    onSet?.({ index, lines: set.lines, level });
+    const seed = Date.now() + index * 7919;
 
-    const lines =
-      mode === 'sentences' ? set.lines :
-      mode === 'words' ? set.lines.slice(0, 2) :
-      set.lines;
+    const sentenceSet = generateRhymeSet(langId, level, seed);
+    const wordSet = generateWordSet(langId, level, seed + 13);
 
-    // Okuma turu: satırlar arası nefes payı
-    for (const line of lines) {
+    const set =
+      mode === 'words' ? wordSet :
+      mode === 'sentences' ? sentenceSet :
+      { ...sentenceSet, lines: [...sentenceSet.lines, ...wordSet.lines], gloss: [...sentenceSet.gloss, ...wordSet.gloss] };
+
+    onSet?.({ index, lines: set.lines, gloss: set.gloss, level });
+
+    // Her satır `repeat` kez okunur (varsayılan 3)
+    for (const line of set.lines) {
       if (myToken !== runToken) return;
 
-      if (useReal) {
-        // Gerçek yankı; endpoint çökerse engine kendi içinde Web Speech'e düşer
-        const used = await engine.speakWithRealEcho(line, lang, rate, echo, endpoint);
-        onMode?.(used);
-      } else {
-        await engine.speakSwell(line, lang, rate, echo);
+      for (let r = 0; r < repeat; r++) {
+        if (myToken !== runToken) return;
+
+        if (useReal) {
+          const used = await engine.speakWithRealEcho(line, lang, rate, echo, endpoint);
+          onMode?.(used);
+        } else {
+          await engine.speakSwell(line, lang, rate, echo);
+        }
+
+        await sleep(700); // tekrarlar arası kısa nefes
       }
 
-      await sleep(2600);
+      await sleep(2200); // satırlar arası
     }
 
-    // Set arası bekleme (42 dk)
-    const totalWait = setDurationMin * 60 * 1000;
-    const waited = await interruptibleSleep(totalWait, () => myToken !== runToken);
+    // Set arası bekleme
+    const waited = await interruptibleSleep(setDurationMin * 60 * 1000, () => myToken !== runToken);
     if (waited) return;
   }
 }

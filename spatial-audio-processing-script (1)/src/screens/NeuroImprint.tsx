@@ -3,6 +3,7 @@ import { ChevronLeft, Play, Square, Waves } from 'lucide-react';
 import { useApp, buzz } from '../store';
 import { startNeuroImprint, stopNeuroImprint } from '../audio/neuroImprint';
 import { CEFR_ORDER, type CEFR } from '../data/rhymes';
+import { wordsOf, phraseBankOf, LEVEL_TR } from '../data/lexicon';
 import { engine } from '../audio/engine';
 import type { EchoProfile } from '../audio/echoChain';
 import { getEndpoint } from '../audio/ttsSettings';
@@ -24,7 +25,9 @@ export default function NeuroImprint() {
   const [running, setRunning] = useState(false);
   const [current, setCurrent] = useState<string[]>([]);
   const [setNo, setSetNo] = useState(0);
+  const [gloss, setGloss] = useState<string[]>([]);
   const [min, setMin] = useState(42);
+  const [repeat, setRepeat] = useState(3);
   const [realReady, setRealReady] = useState(false);
   const runRef = useRef(0);
 
@@ -41,9 +44,11 @@ export default function NeuroImprint() {
       mode,
       echo,
       setDurationMin: min,
+      repeat,
       onSet: (info) => {
         setSetNo(info.index);
         setCurrent(info.lines);
+        setGloss(info.gloss);
       },
     });
     setRunning(false);
@@ -91,10 +96,13 @@ export default function NeuroImprint() {
       </div>
 
       <div className="mb-2 font-mono text-[10px] tracking-widest text-white/40">SEVİYE (CEFR)</div>
-      <div className="mb-4 flex flex-wrap gap-2">
+      <div className="mb-1 flex flex-wrap gap-2">
         {CEFR_ORDER.map((c) => (
           <button key={c} onClick={() => setLevel(c)} className={chip(level === c)}>{c}</button>
         ))}
+      </div>
+      <div className="mb-4 font-mono text-[9px] text-white/35">
+        {LEVEL_TR[level]} · {wordsOf(lang, level).length} kelime · {phraseBankOf(lang, level).length} kalıp
       </div>
 
       <div className="mb-2 font-mono text-[10px] tracking-widest text-white/40">MOD</div>
@@ -123,9 +131,16 @@ export default function NeuroImprint() {
       </div>
 
       <div className="mb-2 font-mono text-[10px] tracking-widest text-white/40">SET SÜRESİ</div>
-      <div className="mb-5 flex flex-wrap gap-2">
+      <div className="mb-4 flex flex-wrap gap-2">
         {[10, 24, 42, 60].map((m) => (
           <button key={m} onClick={() => setMin(m)} className={chip(min === m)}>{m} dk</button>
+        ))}
+      </div>
+
+      <div className="mb-2 font-mono text-[10px] tracking-widest text-white/40">TEKRAR</div>
+      <div className="mb-5 flex flex-wrap gap-2">
+        {[1, 2, 3, 4, 5].map((r) => (
+          <button key={r} onClick={() => setRepeat(r)} className={chip(repeat === r)}>{r}x</button>
         ))}
       </div>
 
@@ -144,9 +159,12 @@ export default function NeuroImprint() {
           <div className="font-mono text-[10px] tracking-widest text-white/40">
             SET {setNo} · {level} · {lang}
           </div>
-          <div className="mt-2 space-y-1.5">
+          <div className="mt-2 space-y-2">
             {current.map((line, i) => (
-              <div key={i} className="text-[14px] leading-snug text-white/85">• {line}</div>
+              <div key={i}>
+                <div className="text-[14px] leading-snug text-white/85">• {line}</div>
+                {gloss[i] && <div className="pl-3 text-[11px] leading-snug text-white/40">{gloss[i]}</div>}
+              </div>
             ))}
           </div>
         </div>

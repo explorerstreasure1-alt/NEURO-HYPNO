@@ -5,6 +5,7 @@ import { engine } from '../audio/engine';
 import { phrasesOf } from '../data/phrases';
 import { getEndpoint, setEndpoint } from '../audio/ttsSettings';
 import type { EchoProfile } from '../audio/echoChain';
+import { CEFR_ORDER, LEVEL_RATE, type CEFR } from '../data/lexicon';
 
 const LANG_MAP: Record<string, string> = {
   ES: 'es-ES', FR: 'fr-FR', EN: 'en-US', DE: 'de-DE', IT: 'it-IT', JP: 'ja-JP',
@@ -14,6 +15,7 @@ const ECHOES: EchoProfile[] = ['basement', 'stage', 'parking'];
 export default function Test() {
   const { setTab } = useApp();
   const [lang, setLang] = useState('EN');
+  const [level, setLevel] = useState<CEFR>('A1');
   const [idx, setIdx] = useState(0);
   const [echo, setEcho] = useState<EchoProfile>('basement');
   const [endpoint, setEndpointState] = useState('');
@@ -21,19 +23,22 @@ export default function Test() {
 
   useEffect(() => { setEndpointState(getEndpoint() ?? ''); }, []);
 
-  const list = phrasesOf(lang);
+  const list = phrasesOf(lang, level);
   const phrase = list[idx % list.length];
 
   const speak = async () => {
     buzz(10);
     const text = phrase.pattern.replace('___', 'usta');
     const ep = getEndpoint();
-    if (ep) {
-      const mode = await engine.speakWithRealEcho(text, LANG_MAP[lang] ?? 'en-US', 0.9, echo, ep);
-      setRealMsg(mode === 'echo' ? 'Gerçek yankı ile okundu' : 'Endpoint çalışmadı, yaklaşık yankı');
-    } else {
-      await engine.speakSwell(text, LANG_MAP[lang] ?? 'en-US', 0.9, echo);
-      setRealMsg('Yaklaşık yankı (Web Speech)');
+    for (let r = 0; r < 3; r++) {
+      if (ep) {
+        const mode = await engine.speakWithRealEcho(text, LANG_MAP[lang] ?? 'en-US', LEVEL_RATE[level], echo, ep);
+        setRealMsg(mode === 'echo' ? 'Gerçek yankı · 3 tekrar' : 'Endpoint çalışmadı, yaklaşık yankı');
+      } else {
+        await engine.speakSwell(text, LANG_MAP[lang] ?? 'en-US', LEVEL_RATE[level], echo);
+        setRealMsg('Yaklaşık yankı (Web Speech) · 3 tekrar');
+      }
+      await new Promise((r2) => setTimeout(r2, 600));
     }
   };
 
@@ -65,6 +70,13 @@ export default function Test() {
       <div className="mb-4 flex flex-wrap gap-2">
         {Object.keys(LANG_MAP).map((k) => (
           <button key={k} onClick={() => { setLang(k); setIdx(0); }} className={chip(lang === k)}>{k}</button>
+        ))}
+      </div>
+
+      <div className="mb-2 font-mono text-[10px] tracking-widest text-white/40">SEVİYE</div>
+      <div className="mb-4 flex flex-wrap gap-2">
+        {CEFR_ORDER.map((c) => (
+          <button key={c} onClick={() => { setLevel(c); setIdx(0); }} className={chip(level === c)}>{c}</button>
         ))}
       </div>
 
