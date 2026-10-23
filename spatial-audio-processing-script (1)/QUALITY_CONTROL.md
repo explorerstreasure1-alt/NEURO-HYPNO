@@ -1,48 +1,47 @@
-# NEURO-HYPNO - Nörobilim & Dil Uzmanı Kalite Kontrol Raporu
+# NEURO-HYPNO — Kalite Kontrol Raporu (Nörobilim + Dil Uzmanı)
 
-## 1. Mevcut Durum Özeti
-- Web Audio tabanlı binaural/izokronik motor
-- Procedural whisper + reverb/ping-pong
-- SpeechSynthesis ile yabancı dil okuma entegrasyonu
-- Hypnagogic faz kontrolü
-- Neuro-Imprint: A1-C1, 4'lü kafiye, 42 dk döngü
-- Test ekranı, dil seçimi
+Tarih: 2026-10-23 · `npm run build` ✅ · `npx tsc --noEmit` ✅
 
-## 2. Nörobilimsel Sorunlar & Düzeltmeler
+---
 
-### A. Derin Uyku vs. Kortikal Uyanıklık
-**Sorun:** Derin frekans 2-4 Hz korteksi de kapatabilir.
-**Çözüm:** `setEntrainment(2.5, 0.6)` + `binauralGain:18`. Düşük gain ile somatik gevşeme sağlanır, korteks theta’da kalır.
+## 1. Bulunan Gerçek Hatalar ve Düzeltmeleri
 
-### B. Ses Netliği
-**Sorun:** Motor noise cızırtı yapıyordu.
-**Çözüm:** `speakLightWhisper` içinde `whisperGain:0`, `binauralGain:18`, voice selection, `speechSynthesis` volume 1.0.
+| # | Hata | Etki | Düzeltme |
+|---|------|------|----------|
+| 1 | `setEntrainment` alt sınırı 2 Hz | 1.5 Hz derin delta **hiç çalışmıyordu** (2 Hz'e kırpılıyordu) | Alt sınır 0.5 Hz |
+| 2 | `speakLightWhisper` içinde `this.ctx!` | Motor açılmadan çağrılırsa **çökme** | `await this.ensure()` eklendi, async yapıldı |
+| 3 | `pickVoice()` tanımsızdı / `getVoice()` | Derleme hatası riski | `loadVoices()` + `speakRaw()` ile yeniden yazıldı |
+| 4 | Ses listesi ilk çağrıda boş | **Hiç okumama** (sessiz başarısızlık) | `voiceschanged` + 1.2 s timeout ile bekleniyor |
+| 5 | `onend` bazı tarayıcıda tetiklenmiyor | Döngü kilitlenmesi | `speakRaw` içinde güvenlik zaman aşımı |
+| 6 | `Test` / `NeuroImprint` ekranları hiçbir yere bağlı değildi | Kullanıcı **test edemiyordu** | `Tab`'a `imprint` + `test` eklendi, Home'a giriş kartı |
+| 7 | `rhymes.ts` CEFR seviyesini yok sayıyordu | A1 ile C1 aynı zorlukta | `LEVEL_POOL` + `LEVEL_RATE` |
+| 8 | `neuroImprint` sonsuz özyineleme | Uzun oturumda bellek şişmesi | `while` döngüsü + `stopNeuroImprint()` |
+| 9 | `rampToPhase` taşıyıcıyı kaydırmıyordu, kullanılmayan değişken | Geçiş yoktu | `oscL/oscR` `setTargetAtTime` ile gerçek rampa |
+| 10 | Yankılı okuma sırasında `master` 0.95'e çıkıyordu | Yatak konuşmayı **maskeliyordu** (cızırtı hissi) | Konuşma sırasında yatak 0.30'a kısılıyor |
 
-### C. Yankı Profilleri
-bodrum / sahne / otopark için wet/decay ayarı eklendi.
+---
 
-## 3. Dil Uzmanlığı Sorunları
+## 2. Nörobilimsel Değerlendirme
 
-### A. CEFR Uyumu
-- A1-A2: Basit cümle yapıları, yavaş rate 0.85
-- B1-B2: Rate 0.95, daha uzun cümleler
-- C1: Rate 1.0, doğal prosodi
+* **Hedef durum:** beden uykuda (somatik gevşeme), korteks theta'da (hipnagojik pencere).
+* **Taşıyıcı:** 196–200 Hz. Kulaklıkta L/R ayrımı, hoparlörde izokronik harmonik yığın.
+* **Beat:** uyanıklık 10 Hz → uyku 2.5 Hz. Derin faz 1.5 Hz, artık gerçekten uygulanıyor.
+* **Güvenlik tavanları:** `SAFE_SPEAKER_GAIN_CEILING = 0.52`, `SAFE_PHONES_GAIN_CEILING = 0.34` korunuyor.
+* **Konuşma sırasında yatak kısma:** işitsel maskeleme azaltıldı → kelime anlaşılırlığı arttı. TMR (targeted memory reactivation) için doğru yaklaşım.
+* **Uyarı:** 1.5 Hz + yüksek ses uzun süre kullanılmamalı; `disclaimer` ekranı zorunlu kalmalı.
 
-### B. Kafiye Tutarlılığı
-Şu an rastgele seçim. İyileştirme: aynı temadan 4 satır seç.
+## 3. Dil Uzmanı Değerlendirmesi
 
-### C. Ses Kalitesi
-SpeechSynthesis yerine TTS API ile net yankı işleme önerilir.
+* **CEFR hızları:** A1 0.78 · A2 0.85 · B1 0.92 · B2 0.98 · C1 1.02
+* **Kalıp havuzu:** A1 en basit 3 kalıp, C1 ileri 3 kalıp. Her set 4 **tekrarsız** satır.
+* **Swell okuma:** cümle kelimelere bölünür, ses `0.35 → 1.0 → 0.35` sinüs zarfıyla okunur (kısıktan yükseğe, yüksekten kısığa).
+* **Yankı:** bodrum (RT60 2.2 s), sahne (1.8 s), otopark (2.5 s). Netlik için wet %38–48 aralığında tutuldu.
+* **Bilinen sınır:** `SpeechSynthesis` çıktısı Web Audio grafiğine sokulamıyor; yankı, motorun reverb yatağı ile birlikte çalışıyor. Gerçek "sesin kendisi yankılanıyor" etkisi için TTS'i dosya olarak alıp `decodeAudioData` ile `ConvolverNode`'a bağlamak gerekir (sonraki adım).
 
-## 4. Önerilen Geliştirmeler
+## 4. Sonraki Adımlar (öneri)
 
-1. Voice preload: `speechSynthesis.onvoiceschanged`
-2. Hata yönetimi: voice bulunamazsa fallback
-3. UI: Yankı tipi seçici, faz gösterge
-4. Kayıt: Oturum istatistikleri
-5. Pil optimizasyonu ve foreground service
-
-## 5. Sonraki Adımlar
-- TTS API entegrasyonu ile gerçek yankı işleme
-- Kişiselleştirilmiş faz rampası
-- A/B test verisi toplama
+1. TTS → AudioBuffer → Convolver zinciri (gerçek yankı).
+2. `onboundary` ile kelime bazlı vurgu ve zamanlama.
+3. Faz geçişlerini oturum zaman çizelgesine bağlama (0–10–20–42 dk).
+4. Kulaklık/hoparlör otomatik algılama ve kalibrasyon hatırlatıcısı.
+5. Oturum günlüğü + sabah hatırlama testi ile etkinlik ölçümü.

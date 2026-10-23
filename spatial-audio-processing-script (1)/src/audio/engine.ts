@@ -717,7 +717,8 @@ class HypnoEngine {
    * depth (0.5-1), hoparlörde nabız belirginliğini ölçekler; güvenlik tavanını aşmaz.
    */
   setEntrainment(freq: number, depth = 1) {
-    const f = Math.min(14, Math.max(2, freq));
+    // 0.5 Hz'e kadar izin ver — derin delta / SWS bandı (kalite kontrol düzeltmesi)
+    const f = Math.min(14, Math.max(0.5, freq));
     this.params.binauralBeat = f;
     if (!this.ctx) return;
     const t = this.ctx.currentTime;
@@ -809,55 +810,131 @@ class HypnoEngine {
     this.analyserTime?.getByteTimeDomainData(data as unknown as Uint8Array<ArrayBuffer>);
   }
 
-  // Yabancı dil kelime/cümle okuma + yankılı sahne
-  speakLightWhisper(text: string, lang = 'tr-TR', rate = 0.92, echo = 'basement') {
-    // Yankı profili - net okuma için düşük wet
-    const profiles: Record<string,{wet:number,decay:number}> = {
-      basement:{wet:45,decay:2.2},
-      stage:{wet:38,decay:1.8},
-      parking:{wet:48,decay:2.5}
+  /** Okuma sahnesini hazırlar: yankı profili + arkada derin delta */
+  private async prepareSpeechScene(echo: string) {
+    await this.ensure();
+
+    const profiles: Record<string, { wet: number; decay: number }> = {
+      basement: { wet: 45, decay: 2.2 },
+      stage: { wet: 38, decay: 1.8 },
+      parking: { wet: 48, decay: 2.5 },
     };
     const p = profiles[echo] ?? profiles.basement;
-    // Derin üçlü frekans arkada çok düşük seviyede
+
+    // Arka planda derin delta; konuşmayı örtmeyecek kadar düşük
     this.setEntrainment(1.5, 0.5);
-    // Netlik için whisper 0, binaural çok düşük, reverb kontrollü
     this.update({ wet: p.wet, whisperGain: 0, binauralGain: 8, masterGain: 88 });
     this.setDecay(p.decay);
     this.setBinauralOn(true);
     this.setWhisperOn(false);
 
-    const getVoice = () => {
-      let voices = speechSynthesis.getVoices();
-      if (!voices.length) return null;
-      let v = voices.find(v => v.lang.toLowerCase().startsWith(lang.split('-')[0].toLowerCase()));
-      if (!v) v = voices.find(v => v.lang.toLowerCase().startsWith('en'));
-      return v ?? null;
-    };
+    // Konuşma süresince yatağı kıs
+    if (this.master && this.ctx) {
+      this.master.gain.setTargetAtTime(0.30, this.ctx.currentTime, 0.2);
+    }
+  }
 
-    const utter = new SpeechSynthesisUtterance(text);
-    utter.lang = lang;
-    utter.rate = rate;
-    utter.pitch = 1.0;
-    utter.volume = 1.0;
+  /** Tek bir utterance'ı Promise olarak okur (volume kontrol edilebilir) */
+  private speakRaw(text: string, lang: string, rate: number, volume = 1.0): Promise<void> {
+    return new Promise((resolve) => {
+      if (typeof speechSynthesis === 'undefined') return resolve();
 
-    const voice = getVoice();
-    if (voice) utter.voice = voice;
+      const voices = speechSynthesis.getVoices();
+      const base = lang.split('-')[0].toLowerCase();
+      const voice =
+        voices.find((v) => v.lang.toLowerCase().startsWith(base)) ??
+        voices.find((v) => v.lang.toLowerCase().startsWith('en')) ??
+        null;
 
-    const now = this.ctx!.currentTime;
-    utter.onstart = () => {
-      if (this.master) {
-        this.master.gain.cancelScheduledValues(now);
-        this.master.gain.setTargetAtTime(0.0, now, 0.01);
-        this.master.gain.setTargetAtTime(0.95, now + 0.3, 0.4); // yumuşak çıkış
-        this.master.gain.setTargetAtTime(0.6, now + 4.0, 1.2); // kademeli iniş
-      }
-    };
-    utter.onend = () => {
-      if (this.master) this.master.gain.setTargetAtTime(0.6, this.ctx!.currentTime, 0.5);
-    };
+      const utter = new SpeechSynthesisUtterance(text);
+      utter.lang = voice?.lang ?? lang;
+      utter.voice = voice;
+      utter.rate = rate;
+      utter.pitch = 1.0;
+      utter.volume = Math.max(0, Math.min(1, volume));
+
+      let settled = false;
+      const done = () => {
+        if (settled) return;
+        settled = true;
+        resolve();
+      };
+      utter.onend = done;
+      utter.onerror = (e) => {
+        console.warn('[TTS] okuma hatası:', e.error, lang, text);
+        done();
+      };
+      // Bazı tarayıcılar onend'i tetiklemez — güvenlik zaman aşımı
+      const guard = Math.max(3000, (text.length / Math.max(0.5, rate)) * 140);
+      setTimeout(done, guard);
+
+      speechSynthesis.speak(utter);
+    });
+  }
+
+  // Yabancı dil kelime/cümle okuma + yankılı sahne
+  async speakLightWhisper(text: string, lang = 'tr-TR', rate = 0.92, echo = 'basement') {
+    await this.prepareSpeechScene(echo);
+    await this.loadVoices();
 
     speechSynthesis.cancel();
-    speechSynthesis.speak(utter);
+    await new Promise((r) => setTimeout(r, 60)); // ilk isteğin yutulmasını önle
+
+    await this.speakRaw(text, lang, rate, 1.0);
+
+    // Yatağı geri aç
+    if (this.master && this.ctx) {
+      this.master.gain.setTargetAtTime(0.79, this.ctx.currentTime, 0.8);
+    }
+  }
+
+  /**
+   * Kısıktan yükseğe → yüksekten kısığa "swell" okuma.
+   * Cümleyi kelimelere böler, her kelimeyi artan/azalan sesle okur.
+   */
+  async speakSwell(text: string, lang = 'tr-TR', rate = 0.92, echo = 'basement') {
+    await this.prepareSpeechScene(echo);
+    await this.loadVoices();
+
+    speechSynthesis.cancel();
+    await new Promise((r) => setTimeout(r, 60));
+
+    const words = text.split(/\s+/).filter(Boolean);
+    const n = words.length;
+
+    for (let i = 0; i < n; i++) {
+      // 0.35 → 1.0 → 0.35 sinüs zarfı
+      const pos = n <= 1 ? 0.5 : i / (n - 1);
+      const vol = 0.35 + 0.65 * Math.sin(Math.PI * pos);
+      await this.speakRaw(words[i], lang, rate, vol);
+      await new Promise((r) => setTimeout(r, 90));
+    }
+
+    if (this.master && this.ctx) {
+      this.master.gain.setTargetAtTime(0.79, this.ctx.currentTime, 0.8);
+    }
+  }
+
+  // Ses listesini garantiye al (Chrome'da ilk çağrıda boş döner)
+  private voicesReady: Promise<SpeechSynthesisVoice[]> | null = null;
+  private loadVoices(): Promise<SpeechSynthesisVoice[]> {
+    if (typeof speechSynthesis === 'undefined') return Promise.resolve([]);
+    const existing = speechSynthesis.getVoices();
+    if (existing.length) return Promise.resolve(existing);
+    if (this.voicesReady) return this.voicesReady;
+
+    this.voicesReady = new Promise((resolve) => {
+      let done = false;
+      const finish = () => {
+        if (done) return;
+        done = true;
+        speechSynthesis.onvoiceschanged = null;
+        resolve(speechSynthesis.getVoices());
+      };
+      speechSynthesis.onvoiceschanged = finish;
+      setTimeout(finish, 1200); // güvenlik zaman aşımı
+    });
+    return this.voicesReady;
   }
 }
 

@@ -20,6 +20,8 @@ import { InductionSheet, SpeakerCalibration } from './screens/Induction';
 import { DisclaimerModal } from './screens/Disclaimer';
 import { ScienceSheet } from './screens/Science';
 import { EncodingSheet } from './screens/Encoding';
+import NeuroImprint from './screens/NeuroImprint';
+import TestScreen from './screens/Test';
 
 // ── mini oynatıcı ──
 function MiniPlayer() {
@@ -287,6 +289,8 @@ function Shell() {
           {tab === 'explore' && <Explore />}
           {tab === 'stats' && <Stats />}
           {tab === 'profile' && <Profile />}
+          {tab === 'imprint' && <NeuroImprint />}
+          {tab === 'test' && <TestScreen />}
         </div>
         {playing && <div className="h-[70px]" />}
       </div>

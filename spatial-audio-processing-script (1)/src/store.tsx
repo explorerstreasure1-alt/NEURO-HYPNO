@@ -12,7 +12,7 @@ import type { ResolvedStage } from './data/stages';
 import { newSrsCard, reviewSrsCard, dueCards, srsKey } from './data/srs';
 import type { SrsCard, SrsDeck } from './data/srs';
 
-export type Tab = 'home' | 'explore' | 'stats' | 'profile';
+export type Tab = 'home' | 'explore' | 'stats' | 'profile' | 'imprint' | 'test';
 
 export interface Toast { id: number; text: string; kind: 'info' | 'success' | 'theta' | 'warn' }
 export interface JournalEntry { id: number; date: string; text: string; mood: string }

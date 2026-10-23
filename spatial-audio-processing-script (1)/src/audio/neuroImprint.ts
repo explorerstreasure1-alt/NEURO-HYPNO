@@ -1,43 +1,86 @@
 import { engine } from './engine';
-import { generateRhymeSet, CEFR } from '../data/rhymes';
+import { generateRhymeSet, LEVEL_RATE, type CEFR } from '../data/rhymes';
 import { rampToPhase } from './hypnagogic';
 
 export type ImprintMode = 'words' | 'sentences' | 'both';
 
-export async function startNeuroImprint({
-  langId='EN',
-  level='A1' as CEFR,
-  mode='both' as ImprintMode,
-  setIntervalMin=42
-}={}){
-  // 1. Bedeni uyut, beyni theta’da tut
-  rampToPhase(engine, 'hypnagogic', 60);
-  
-  // 2. Net yankılı ses için parametreler
-  engine.update({ wet:55, highCut:7000, whisperGain:35, binauralGain:40, masterGain:90 });
+export interface ImprintOptions {
+  langId?: string;
+  level?: CEFR;
+  mode?: ImprintMode;
+  setDurationMin?: number; // her 4'lü setin süresi
+  onSet?: (info: { index: number; lines: string[]; level: CEFR }) => void;
+}
 
-  let setCount = 0;
-  const nextSet = async ()=>{
-    setCount++;
-    const seed = Date.now() + setCount*9999;
-    const set = generateRhymeSet(langId, level, seed);
-    const lines = mode==='sentences' ? set.lines : mode==='words' ? set.lines.slice(0,2) : set.lines;
-    
-    // Seti okuma: her satır 7 sn aralıkla
-    for(const line of lines){
-      engine.speakLightWhisper(line, langMap(langId), 0.9);
-      await sleep(7000);
+const LANG_MAP: Record<string, string> = {
+  ES: 'es-ES', FR: 'fr-FR', EN: 'en-US', DE: 'de-DE', IT: 'it-IT', JP: 'ja-JP',
+};
+
+const sleep = (ms: number) => new Promise((r) => setTimeout(r, ms));
+
+let runToken = 0;
+
+/** Devam eden imprint döngüsünü durdurur */
+export function stopNeuroImprint() {
+  runToken++;
+  speechSynthesis?.cancel();
+  engine.setWhisperOn(false);
+}
+
+export async function startNeuroImprint(opts: ImprintOptions = {}) {
+  const {
+    langId = 'EN',
+    level = 'A1',
+    mode = 'both',
+    setDurationMin = 42,
+    onSet,
+  } = opts;
+
+  const myToken = ++runToken;
+
+  // 1) Bedeni uyut, beyni theta'da tut
+  await rampToPhase(engine, 'hypnagogic', 60);
+  if (myToken !== runToken) return;
+
+  // 2) Net, yankılı okuma ayarları
+  engine.update({ wet: 45, highCut: 7000, whisperGain: 0, binauralGain: 10, masterGain: 88 });
+
+  const lang = LANG_MAP[langId] ?? 'en-US';
+  const rate = LEVEL_RATE[level] ?? 0.85;
+
+  let index = 0;
+  while (myToken === runToken) {
+    index++;
+    const set = generateRhymeSet(langId, level, Date.now() + index * 7919);
+    onSet?.({ index, lines: set.lines, level });
+
+    const lines =
+      mode === 'sentences' ? set.lines :
+      mode === 'words' ? set.lines.slice(0, 2) :
+      set.lines;
+
+    // Okuma turu: satırlar arası nefes payı
+    for (const line of lines) {
+      if (myToken !== runToken) return;
+      await engine.speakSwell(line, lang, rate, 'basement');
+      await sleep(2600);
     }
-    // 42 dk bekle, sonra yeni 4’lü sete geç
-    await sleep(setIntervalMin*60*1000);
-    await nextSet();
-  };
-  
-  await nextSet();
+
+    // Set arası bekleme (42 dk)
+    const totalWait = setDurationMin * 60 * 1000;
+    const waited = await interruptibleSleep(totalWait, () => myToken !== runToken);
+    if (waited) return;
+  }
 }
 
-function langMap(id:string){
-  const m:{[k:string]:string}={ES:'es-ES',FR:'fr-FR',EN:'en-US',DE:'de-DE',IT:'it-IT',JP:'ja-JP'};
-  return m[id]||'en-US';
+function interruptibleSleep(ms: number, shouldStop: () => boolean): Promise<boolean> {
+  return new Promise((resolve) => {
+    const start = Date.now();
+    const tick = () => {
+      if (shouldStop()) return resolve(true);
+      if (Date.now() - start >= ms) return resolve(false);
+      setTimeout(tick, 1000);
+    };
+    tick();
+  });
 }
-const sleep = (ms:number)=>new Promise(r=>setTimeout(r,ms));

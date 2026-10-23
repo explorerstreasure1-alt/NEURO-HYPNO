@@ -73,6 +73,21 @@ export default function Home() {
         </button>
       </header>
 
+      {/* ── nöro-imprint girişi ── */}
+      <button
+        onClick={() => { buzz(10); setTab('imprint'); }}
+        className="pressable anim-fadeUp flex w-full items-center gap-3 rounded-2xl border border-fuchsia-400/25 bg-gradient-to-r from-fuchsia-500/15 to-cyan-500/10 p-3.5 text-left"
+      >
+        <span className="flex h-11 w-11 shrink-0 items-center justify-center rounded-xl bg-gradient-to-br from-fuchsia-500/40 to-cyan-500/30">
+          <Brain className="h-5 w-5 text-fuchsia-100" />
+        </span>
+        <span className="min-w-0 flex-1">
+          <span className="block text-[14px] font-bold">Nöro-İmprint · A1–C1</span>
+          <span className="block font-mono text-[10px] text-white/45">Net yankılı kelime & cümle · 42 dk / set</span>
+        </span>
+        <ChevronRight className="h-4 w-4 shrink-0 text-white/40" />
+      </button>
+
       {/* ── bu gecenin seansı ── */}
       <section className="anim-fadeUp stagger-1 relative overflow-hidden rounded-[28px] border border-white/12 bg-gradient-to-br from-[#151045] via-[#0d0830] to-[#07031c] p-5 shadow-[0_20px_60px_rgba(0,0,0,0.5)]">
         <div className="pointer-events-none absolute -right-16 -top-16 h-56 w-56 rounded-full bg-violet-600/30 blur-3xl" />
