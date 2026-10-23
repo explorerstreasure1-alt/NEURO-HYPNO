@@ -1,34 +1,67 @@
 # APK Oluşturma ve Kurulum
 
-## 1. Android Studio ile aç
+## 1. Web uygulamasını derle
+
+```powershell
+cd "spatial-audio-processing-script (1)"
+npm install
+npm run build
+```
+
+Bu, `dist/index.html` dosyasını üretir (tek dosya, tüm JS/CSS içinde).
+
+## 2. Android Studio ile aç
 * `usta-download` klasörünü Android Studio'da Import Project ile aç
 * Gradle sync yap
 
-## 2. Logo değiştir
+Gradle, `preBuild` adımında `dist/index.html` dosyasını otomatik olarak
+`app/src/main/assets/index.html` içine kopyalar (`syncWebAssets` görevi).
+
+## 3. Uygulama nereden açılacak?
+
+**Varsayılan (önerilen): gömülü sürüm.** `appUrl` boş bırakılır, APK içindeki
+`assets/index.html` açılır. İnternet gerekmez; ses, telefonun **kendi TTS
+motorundan doğru dil etiketiyle** üretilir (bkz. `TtsBridge.kt`).
+Yankı ve swell Web Audio'da gerçek `ConvolverNode` ile uygulanır.
+
+Uzak sürüm (Vercel) kullanmak istersen:
+
+```powershell
+cd usta-download
+./gradlew assembleDebug -PappUrl=https://senin-app.vercel.app
+```
+
+Bu durumda `/api/tts` de denenir (Google TTS, en doğal aksan).
+
+## 4. Logo değiştir
 * `app/src/main/res/drawable/ic_launcher.xml` dosyasını kendi logo png/svg'n ile değiştir
 * veya `AndroidManifest.xml` `android:icon` güncelle
 
-## 3. Web adresini ayarla
-* `WebAppActivity.kt` içindeki `webView.loadUrl` satırını Vercel linkin ile değiştir
-* Örnek: `https://frekans-yabanci-dil.vercel.app`
+## 5. Pil optimizasyonu
+Uygulama ilk açıldığında Ayarlar > Pil > Kısıtlamalar'dan uygulamayı "Optimize etme" yap.
+`PlaybackForegroundService` süresiz `PARTIAL_WAKE_LOCK` tutar; ekran kapalıyken
+okuma devam eder.
 
-## 4. Pil optimizasyonu
-Uygulama ilk açıldığında ayarlar > Pil > Kısıtlamalar'dan Usta'yı "Optimize etme" yap
-Veya kodda `BatteryOptHelper.requestIgnoreBatteryOptimizations` çağrısı ekle
-
-## 5. APK derle
+## 6. APK derle
 * Build > Generate Signed Bundle / APK
 * Release seç, keystore oluştur
 * APK `app/build/outputs/apk/release/app-release.apk` altında oluşur
 
-## 6. Telefone kur
+## 7. Telefone kur
 * Telefonda Ayarlar > Güvenlik > Bilinmeyen kaynaklara izin ver
 * APK'ya tıkla, kurulum yap
 * Uygulama logosu ile ana ekranda görünür
-* Uygulamayı açtığında WebView içinde Vercel sayfan yüklenir
-* İçeride "İndirme Başlat" butonu tıklandığında DownloadForegroundService çalışır, ekran kapansa bile indirme devam eder, bildirimde ilerleme görünür
+
+## Ses paketleri (aksen için şart)
+
+Uygulama **yanlış aksanla okumaz**. Bir dil için ses yoksa o dil sessiz kalır.
+
+* Ayarlar > Sistem > Diller ve giriş > Metin okuma (TTS) > Google Konuşma Hizmetleri
+* "Ses verilerini yükle" → İngilizce, Almanca, Fransızca, İspanyolca, İtalyanca, Japonca
+* İnternetli sesleri indirirsen daha doğal tonlama elde edilir
 
 ## Notlar
 * Android 13+ için bildirim izni ilk kullanımda istenir
-* Büyük dosya indirmelerde `PARTIAL_WAKE_LOCK` + Foreground Service kombinasyonu kesintisiz çalışma sağlar
-* DownloadManager alternatifi daha az kod ister ama ilerleme kontrolü kısıtlıdır
+* Android 11+ için `AndroidManifest.xml` içinde TTS motoru `<queries>` ile görünür kılınır
+* `TtsBridge.synthesize()` metni WAV'a yazar, web tarafı bunu `AudioBuffer` olarak
+  çözüp yankı zincirine verir — bu yüzden yerel TTS bile gerçek yankı alır

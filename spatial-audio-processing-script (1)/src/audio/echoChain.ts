@@ -140,28 +140,44 @@ export class EchoChain {
   }
 
   /** Buffer'ı gerçek yankıdan geçirerek çalar; bitince resolve olur */
-  play(buffer: AudioBuffer, gain = 1.0): Promise<void> {
+  play(buffer: AudioBuffer, gain = 1.0, swell = true): Promise<void> {
     return new Promise((resolve) => {
-      this.startSource(buffer, this.ctx.currentTime, gain, () => resolve());
+      this.startSource(buffer, this.ctx.currentTime, gain, () => resolve(), swell);
     });
   }
 
   /**
    * Buffer'ı ileri bir zamanda çalar (Web Audio saati).
    * Ekran kapalıyken setTimeout kısıtlansa bile ses devam eder.
+   * swell: cümlenin tamamına 0.35 → 1.0 → 0.35 ses zarfı uygular
+   *        (kelimelere bölmeden → doğal tonlama ve aksan korunur).
    * @returns buffer süresi (saniye)
    */
-  schedule(buffer: AudioBuffer, when: number, gain = 1.0): number {
-    this.startSource(buffer, Math.max(when, this.ctx.currentTime), gain);
+  schedule(buffer: AudioBuffer, when: number, gain = 1.0, swell = true): number {
+    this.startSource(buffer, Math.max(when, this.ctx.currentTime), gain, undefined, swell);
     return buffer.duration;
   }
 
-  private startSource(buffer: AudioBuffer, when: number, gain: number, onEnd?: () => void) {
+  private startSource(
+    buffer: AudioBuffer,
+    when: number,
+    gain: number,
+    onEnd?: () => void,
+    swell = false,
+  ) {
     const src = this.ctx.createBufferSource();
     src.buffer = buffer;
 
     const g = this.ctx.createGain();
-    g.gain.value = gain;
+    if (swell) {
+      const dur = Math.max(0.05, buffer.duration);
+      const lo = Math.max(0.02, gain * 0.35);
+      g.gain.setValueAtTime(lo, when);
+      g.gain.linearRampToValueAtTime(gain, when + dur * 0.45);
+      g.gain.linearRampToValueAtTime(lo, when + dur);
+    } else {
+      g.gain.setValueAtTime(gain, when);
+    }
 
     src.connect(g);
     g.connect(this.input);

@@ -657,13 +657,16 @@ export function AppProvider({ children }: { children: ReactNode }) {
         setWhisperReading(line);
         setWhisperReal(real);
       },
+      onProblem: (msg) => {
+        pushToast(`⚠️ ${msg}`, 'warn');
+      },
     });
 
     return () => {
       stopWhisperSession();
       setWhisperReading('');
     };
-  }, [whisperArmed, playing, current.lang, current.level]);
+  }, [whisperArmed, playing, current.lang, current.level, pushToast]);
 
   // 10 dk rampasını okuyucuya anlık aktar (efekti yeniden başlatmadan)
   useEffect(() => {

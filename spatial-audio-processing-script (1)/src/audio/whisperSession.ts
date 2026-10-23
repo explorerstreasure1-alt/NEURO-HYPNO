@@ -23,6 +23,8 @@ export interface WhisperSessionOptions {
   /** 0-1 arası anlık ses ölçeği (10 dk rampası) */
   getVolume?: () => number;
   onLine?: (info: { line: string; gloss: string; index: number; real: boolean }) => void;
+  /** Ana dili sesi yok / TTS ulaşılamıyor gibi durumlarda kullanıcıya bildir */
+  onProblem?: (message: string) => void;
 }
 
 export const TTS_LANG: Record<string, string> = {
@@ -77,13 +79,16 @@ export async function startWhisperSession(opts: WhisperSessionOptions): Promise<
     endpoint = null,
     getVolume = () => 1,
     onLine,
+    onProblem,
   } = opts;
 
   const tuning = LANG_TUNING[langId] ?? LANG_TUNING.EN;
   const echo = opts.echo ?? tuning.echo;
   const lang = TTS_LANG[langId] ?? 'en-US';
   const rate = (LEVEL_RATE[level] ?? 0.85) * tuning.rateScale;
-  const useReal = !!endpoint;
+  // Sunucu TTS yoksa Android yerel sentezi (AudioBuffer) devreye girer.
+  // İkisi de yoksa playSpoken → yalnızca ana dili sesi varsa okur.
+  const useReal = true;
 
   let round = 0;
   let lineNo = 0;
@@ -111,23 +116,26 @@ export async function startWhisperSession(opts: WhisperSessionOptions): Promise<
         lang,
         rate,
         echo,
-        endpoint: endpoint!,
+        endpoint,
         getVolume,
         onLine,
+        onProblem,
         nextIndex: () => lineNo++,
       });
       if (done) return;
 
-      // Endpoint hiç çalışmadıysa Web Speech'e düş
+      // Endpoint hiç çalışmadıysa: ana dili sesi varsa Web Speech'e düş
       if (!running) return;
       if (my !== token) return;
-      await playSpoken(set.lines, set.gloss, {
-        my, repeat, lang, rate, echo, getVolume, onLine, nextIndex: () => lineNo++,
+      const spoke = await playSpoken(set.lines, set.gloss, {
+        my, repeat, lang, rate, echo, getVolume, onLine, onProblem, nextIndex: () => lineNo++,
       });
+      if (!spoke) return;
     } else {
-      await playSpoken(set.lines, set.gloss, {
-        my, repeat, lang, rate, echo, getVolume, onLine, nextIndex: () => lineNo++,
+      const spoke = await playSpoken(set.lines, set.gloss, {
+        my, repeat, lang, rate, echo, getVolume, onLine, onProblem, nextIndex: () => lineNo++,
       });
+      if (!spoke) return;
     }
 
     if (my !== token) return;
@@ -143,6 +151,7 @@ interface PlayCtx {
   echo: EchoProfile;
   getVolume: () => number;
   onLine?: (info: { line: string; gloss: string; index: number; real: boolean }) => void;
+  onProblem?: (message: string) => void;
   nextIndex: () => number;
 }
 
@@ -153,7 +162,7 @@ interface PlayCtx {
 async function playScheduled(
   lines: string[],
   gloss: string[],
-  p: PlayCtx & { endpoint: string },
+  p: PlayCtx & { endpoint: string | null },
 ): Promise<boolean> {
   const ctx = await engine.ensureContext();
   const t0 = ctx.currentTime;
@@ -216,27 +225,40 @@ async function playScheduled(
   return p.my !== token;
 }
 
-/** Web Speech ile sıralı okuma (endpoint yoksa / çökerse) */
-async function playSpoken(lines: string[], gloss: string[], p: PlayCtx): Promise<void> {
+/** Web Speech ile sıralı okuma (endpoint yoksa / çökerse) — ana dili sesi yoksa HİÇ okumaz */
+async function playSpoken(lines: string[], gloss: string[], p: PlayCtx): Promise<boolean> {
+  let spokeAny = false;
+
   for (let i = 0; i < lines.length; i++) {
-    if (p.my !== token) return;
+    if (p.my !== token) return spokeAny;
 
     const line = lines[i];
     const gl = gloss[i] ?? '';
     p.onLine?.({ line, gloss: gl, index: p.nextIndex(), real: false });
 
     for (let r = 0; r < p.repeat; r++) {
-      if (p.my !== token) return;
+      if (p.my !== token) return spokeAny;
 
       // Android'de çok düşük volume tamamen sessize alınabilir → alt sınır.
       const vol = Math.max(0.10, Math.min(1, p.getVolume()));
-      await engine.speakSwell(line, p.lang, p.rate, p.echo, vol, true);
+      const ok = await engine.speakSwell(line, p.lang, p.rate, p.echo, vol, true);
 
-      if (p.my !== token) return;
+      if (!ok) {
+        p.onProblem?.(
+          `${p.lang} için cihazda ana dili sesi yok. Yanlış aksanla okumak yerine durduruldu. ` +
+          `İnternet bağlantısını kontrol edin (gerçek TTS) veya telefon ayarlarından ${p.lang} ses paketini kurun.`,
+        );
+        return spokeAny;
+      }
+
+      spokeAny = true;
+      if (p.my !== token) return spokeAny;
       await sleep(750);
     }
 
-    if (p.my !== token) return;
+    if (p.my !== token) return spokeAny;
     await sleep(2400);
   }
+
+  return spokeAny;
 }

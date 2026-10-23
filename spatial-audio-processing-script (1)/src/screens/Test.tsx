@@ -1,11 +1,13 @@
 import { useEffect, useState } from 'react';
-import { ChevronLeft, Play, Waves } from 'lucide-react';
+import { ChevronLeft, Play, Waves, Mic } from 'lucide-react';
 import { useApp, buzz } from '../store';
 import { engine } from '../audio/engine';
 import { phrasesOf } from '../data/phrases';
 import { getEndpoint, setEndpoint } from '../audio/ttsSettings';
 import type { EchoProfile } from '../audio/echoChain';
 import { CEFR_ORDER, LEVEL_RATE, type CEFR } from '../data/lexicon';
+import { wordsOf } from '../data/lexicon';
+import { localeOf, nativeVoiceName, androidHasLanguage } from '../audio/voice';
 
 const LANG_MAP: Record<string, string> = {
   ES: 'es-ES', FR: 'fr-FR', EN: 'en-US', DE: 'de-DE', IT: 'it-IT', JP: 'ja-JP',
@@ -20,25 +22,64 @@ export default function Test() {
   const [echo, setEcho] = useState<EchoProfile>('basement');
   const [endpoint, setEndpointState] = useState('');
   const [realMsg, setRealMsg] = useState('');
+  const [voiceName, setVoiceName] = useState<string | null>(null);
+  const [checking, setChecking] = useState(false);
 
   useEffect(() => { setEndpointState(getEndpoint() ?? ''); }, []);
 
+  useEffect(() => {
+    const target = localeOf(LANG_MAP[lang] ?? 'en-US');
+    const update = () => setVoiceName(nativeVoiceName(target));
+    update();
+    try {
+      speechSynthesis?.addEventListener?.('voiceschanged', update);
+      return () => speechSynthesis?.removeEventListener?.('voiceschanged', update);
+    } catch {
+      return undefined;
+    }
+  }, [lang]);
+
   const list = phrasesOf(lang, level);
   const phrase = list[idx % list.length];
+  const sampleWord = wordsOf(lang, level)[idx % Math.max(1, wordsOf(lang, level).length)]?.text ?? '';
 
   const speak = async () => {
     buzz(10);
-    const text = phrase.pattern.replace('___', 'usta');
+    const target = localeOf(LANG_MAP[lang] ?? 'en-US');
+    const text = phrase.pattern.includes('___') ? phrase.pattern.replace('___', sampleWord) : phrase.pattern;
     const ep = getEndpoint();
     for (let r = 0; r < 3; r++) {
       if (ep) {
-        const mode = await engine.speakWithRealEcho(text, LANG_MAP[lang] ?? 'en-US', LEVEL_RATE[level], echo, ep);
-        setRealMsg(mode === 'echo' ? 'Gerçek yankı · 3 tekrar' : 'Endpoint çalışmadı, yaklaşık yankı');
+        const mode = await engine.speakWithRealEcho(text, target, LEVEL_RATE[level], echo, ep);
+        setRealMsg(
+          mode === 'echo'
+            ? '✅ Ana dili sesi (gerçek TTS) · Convolver yankı · 3 tekrar'
+            : mode === 'silent'
+              ? '⛔ Ana dili sesi yok — yanlış aksanla okumamak için sustu'
+              : '⚠️ TTS ulaşılamadı, cihaz sesi (ana dili varsa) kullanıldı',
+        );
       } else {
-        await engine.speakSwell(text, LANG_MAP[lang] ?? 'en-US', LEVEL_RATE[level], echo);
-        setRealMsg('Yaklaşık yankı (Web Speech) · 3 tekrar');
+        const ok = await engine.speakSwell(text, target, LEVEL_RATE[level], echo);
+        setRealMsg(ok ? '⚠️ Endpoint yok · cihazın ana dili sesi kullanıldı' : '⛔ Bu dil için ana dili sesi yok — okuma atlandı');
       }
       await new Promise((r2) => setTimeout(r2, 600));
+    }
+  };
+
+  const checkEndpoint = async () => {
+    const ep = getEndpoint();
+    if (!ep) { setRealMsg('Endpoint tanımlı değil (yerel geliştirme modu)'); return; }
+    setChecking(true);
+    const url = ep
+      .replace('{text}', encodeURIComponent('Hello, this is the native voice test.'))
+      .replace('{lang}', encodeURIComponent(localeOf(LANG_MAP[lang] ?? 'en-US')));
+    try {
+      const res = await fetch(url);
+      setRealMsg(res.ok ? `✅ Endpoint hazır · ${res.status} · ${res.headers.get('content-type') ?? ''}` : `⛔ Endpoint hata · HTTP ${res.status}`);
+    } catch {
+      setRealMsg('⛔ Endpoint ulaşılamıyor · CORS veya adres hatası');
+    } finally {
+      setChecking(false);
     }
   };
 
@@ -73,6 +114,16 @@ export default function Test() {
         ))}
       </div>
 
+      <div className="mb-4 flex items-start gap-2 rounded-xl border border-white/10 bg-white/[0.03] px-3 py-2">
+        <Mic className={`mt-0.5 h-3.5 w-3.5 shrink-0 ${voiceName ? 'text-emerald-300' : 'text-amber-300'}`} />
+        <div className="min-w-0">
+          <div className="font-mono text-[9px] tracking-widest text-white/35">ANA DİLİ SESİ · {localeOf(LANG_MAP[lang] ?? 'en-US')}</div>
+          <div className={`truncate text-[11.5px] ${voiceName ? 'text-emerald-200/90' : 'text-amber-200/90'}`}>
+            {voiceName ?? (androidHasLanguage(localeOf(LANG_MAP[lang] ?? 'en-US')) ? 'Android yerel TTS (ana dili) hazır' : 'Bulunamadı — yanlış aksanla okunmaz, TTS endpoint kullanılır')}
+          </div>
+        </div>
+      </div>
+
       <div className="mb-2 font-mono text-[10px] tracking-widest text-white/40">SEVİYE</div>
       <div className="mb-4 flex flex-wrap gap-2">
         {CEFR_ORDER.map((c) => (
@@ -100,9 +151,17 @@ export default function Test() {
         placeholder="https://.../api/tts?text={text}&lang={lang}"
         className="mb-1 w-full rounded-xl border border-white/10 bg-black/40 px-3 py-2 font-mono text-[11px] text-white/80 outline-none focus:border-cyan-400/50"
       />
-      <p className="mb-4 font-mono text-[9px] leading-relaxed text-white/30">
+      <p className="mb-2 font-mono text-[9px] leading-relaxed text-white/30">
         Audio (mp3/wav) döndüren bir endpoint girilirse ses Convolver + ping-pong zincirinden geçer; gerçek yankı oluşur.
+        Endpoint yoksa cihazın <b>ana dili sesi</b> kullanılır; o da yoksa yanlış aksanla okumamak için okuma atlanır.
       </p>
+      <button
+        onClick={checkEndpoint}
+        disabled={checking}
+        className="pressable mb-3 w-full rounded-xl border border-cyan-400/30 bg-cyan-500/10 py-2 font-mono text-[10px] tracking-widest text-cyan-200 disabled:opacity-50"
+      >
+        {checking ? 'KONTROL EDİLİYOR…' : 'ENDPOINT BAĞLANTISINI KONTROL ET'}
+      </button>
       {realMsg && <p className="mb-3 font-mono text-[10px] text-emerald-300/80">{realMsg}</p>}
 
       <div className="rounded-2xl border border-white/10 bg-white/[0.04] p-4">

@@ -1,0 +1,7 @@
+{
+  "$schema": "https://openapi.vercel.sh/vercel.json",
+  "framework": null,
+  "installCommand": "npm --prefix \"spatial-audio-processing-script (1)\" install",
+  "buildCommand": "npm --prefix \"spatial-audio-processing-script (1)\" run build",
+  "outputDirectory": "spatial-audio-processing-script (1)/dist"
+}

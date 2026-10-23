@@ -13,6 +13,7 @@
 
 import { EchoChain, type EchoProfile } from './echoChain';
 import { loadTtsBuffer, makeEchoDemoBuffer } from './tts';
+import { pickNativeVoice, androidTts, androidHasLanguage, localeOf } from './voice';
 
 export type OutputMode = 'phones' | 'speaker';
 
@@ -850,7 +851,7 @@ class HypnoEngine {
     // Konuşma süresince yatağı kıs (önceki seviyeyi sakla)
     if (this.master && this.ctx) {
       this.preSpeechMaster = this.master.gain.value || 0.79;
-      this.master.gain.setTargetAtTime(0.30, this.ctx.currentTime, 0.2);
+      this.master.gain.setTargetAtTime(0.24, this.ctx.currentTime, 0.2);
     }
   }
 
@@ -863,35 +864,52 @@ class HypnoEngine {
 
   private preSpeechMaster = 0.79;
 
-  /** Tek bir utterance'ı Promise olarak okur (volume kontrol edilebilir) */
-  private speakRaw(text: string, lang: string, rate: number, volume = 1.0): Promise<void> {
-    return new Promise((resolve) => {
-      if (typeof speechSynthesis === 'undefined') return resolve();
+  /**
+   * Tek bir ifadeyi okur.
+   * @returns true → gerçekten okundu, false → ana dili sesi yok (YANLIŞ AKSANLA OKUNMAZ)
+   */
+  private async speakRaw(text: string, lang: string, rate: number, volume = 1.0): Promise<boolean> {
+    // 1) Android yerel TTS köprüsü — dil etiketi zorunlu, yanlış ses yok
+    const bridge = androidTts();
+    if (bridge && androidHasLanguage(lang)) {
+      const ok = await new Promise<boolean>((resolve) => {
+        try {
+          bridge.speak(text, localeOf(lang), rate, Math.max(0, Math.min(1, volume)));
+          const started = Date.now();
+          const poll = () => {
+            let speaking = true;
+            try { speaking = !!bridge.isSpeaking?.(); } catch { speaking = false; }
+            if (!speaking) return resolve(true);
+            if (Date.now() - started > 20_000) {
+              try { bridge.stopSpeaking?.(); } catch { /* noop */ }
+              return resolve(true);
+            }
+            setTimeout(poll, 120);
+          };
+          setTimeout(poll, 150);
+        } catch {
+          resolve(false);
+        }
+      });
+      if (ok) return true;
+    }
 
-      const voices = speechSynthesis.getVoices();
-      const base = lang.split('-')[0].toLowerCase();
-      const exact = voices.filter((v) => v.lang.toLowerCase() === lang.toLowerCase());
-      const sameLang = voices.filter((v) => v.lang.toLowerCase().startsWith(base));
+    // 2) Web Speech — SADECE ana dili sesi varsa
+    if (typeof speechSynthesis === 'undefined') return false;
+    await this.loadVoices();
 
-      // Kaliteli ses önceliği: Google/Neural/Natural > diğer uzak sesler > yerel
-      const score = (v: SpeechSynthesisVoice) => {
-        const n = v.name.toLowerCase();
-        let s = 0;
-        if (n.includes('google')) s += 50;
-        if (n.includes('natural') || n.includes('neural')) s += 45;
-        if (n.includes('microsoft')) s += 20;
-        if (n.includes('espeak') || n.includes('compact')) s -= 60;
-        if (!v.localService) s += 5;
-        return s;
-      };
-      const pool = exact.length ? exact : sameLang;
-      const voice =
-        [...pool].sort((a, b) => score(b) - score(a))[0] ??
-        voices.find((v) => v.lang.toLowerCase().startsWith('en')) ??
-        null;
+    const voice = pickNativeVoice(lang);
+    if (!voice) {
+      console.warn(
+        `[AKSAN] ${lang} için ana dili sesi yok. Yanlış aksanla okumak yerine okuma atlandı. ` +
+        `Çözüm: /api/tts (gerçek TTS) veya cihaza ${localeOf(lang)} ses paketi kur.`,
+      );
+      return false;
+    }
 
+    return new Promise<boolean>((resolve) => {
       const utter = new SpeechSynthesisUtterance(text);
-      utter.lang = voice?.lang ?? lang;
+      utter.lang = voice.lang || localeOf(lang);
       utter.voice = voice;
       utter.rate = rate;
       utter.pitch = 1.0;
@@ -901,7 +919,7 @@ class HypnoEngine {
       const done = () => {
         if (settled) return;
         settled = true;
-        resolve();
+        resolve(true);
       };
       utter.onend = done;
       utter.onerror = (e) => {
@@ -917,22 +935,22 @@ class HypnoEngine {
   }
 
   // Yabancı dil kelime/cümle okuma + yankılı sahne
-  async speakLightWhisper(text: string, lang = 'tr-TR', rate = 0.92, echo = 'basement') {
+  async speakLightWhisper(text: string, lang = 'tr-TR', rate = 0.92, echo = 'basement'): Promise<boolean> {
     await this.prepareSpeechScene(echo);
     await this.loadVoices();
 
-    speechSynthesis.cancel();
+    try { if (typeof speechSynthesis !== 'undefined') speechSynthesis.cancel(); } catch { /* noop */ }
     await new Promise((r) => setTimeout(r, 60)); // ilk isteğin yutulmasını önle
 
-    await this.speakRaw(text, lang, rate, 1.0);
+    const ok = await this.speakRaw(text, lang, rate, 1.0);
 
     this.restoreMaster();
+    return ok;
   }
 
   /**
    * Kısıktan yükseğe → yüksekten kısığa "swell" okuma.
-   * Cümleyi kelimelere böler, her kelimeyi artan/azalan sesle okur.
-   * volume: 0-1 dış ölçek (10 dk rampası için).
+   * Ana dili sesi yoksa false döner ve HİÇ okumaz (yanlış aksan yok).
    */
   async speakSwell(
     text: string,
@@ -941,26 +959,29 @@ class HypnoEngine {
     echo = 'basement',
     volume = 1.0,
     preserveScene = false,
-  ) {
+  ): Promise<boolean> {
     await this.prepareSpeechScene(echo, preserveScene);
     await this.loadVoices();
 
-    speechSynthesis.cancel();
+    try { if (typeof speechSynthesis !== 'undefined') speechSynthesis.cancel(); } catch { /* noop */ }
     await new Promise((r) => setTimeout(r, 60));
 
     const words = text.split(/\s+/).filter(Boolean);
     const n = words.length;
+    let any = false;
 
     for (let i = 0; i < n; i++) {
       // 0.35 → 1.0 → 0.35 sinüs zarfı × dış ölçek
       const pos = n <= 1 ? 0.5 : i / (n - 1);
       const env = 0.35 + 0.65 * Math.sin(Math.PI * pos);
       const vol = Math.max(0, Math.min(1, env * volume));
-      await this.speakRaw(words[i], lang, rate, vol);
+      const ok = await this.speakRaw(words[i], lang, rate, vol);
+      any = any || ok;
       await new Promise((r) => setTimeout(r, 90));
     }
 
     this.restoreMaster();
+    return any;
   }
 
   // ── GERÇEK YANKI ─────────────────────────────────────────────
@@ -986,15 +1007,15 @@ class HypnoEngine {
     endpoint?: string | null,
     volume = 1.0,
     preserveScene = false,
-  ): Promise<'echo' | 'fallback'> {
+  ): Promise<'echo' | 'fallback' | 'silent'> {
     await this.ensure();
     const ctx = this.ctx!;
     await this.prepareSpeechScene(echo, preserveScene);
 
     const buffer = await loadTtsBuffer(ctx, text, lang, endpoint);
     if (!buffer) {
-      await this.speakSwell(text, lang, rate, echo, volume, preserveScene);
-      return 'fallback';
+      const ok = await this.speakSwell(text, lang, rate, echo, volume, preserveScene);
+      return ok ? 'fallback' : 'silent';
     }
 
     const chain = this.ensureEchoChain(echo);
@@ -1036,9 +1057,9 @@ class HypnoEngine {
    * TTS buffer'ını Web Audio saatiyle ileri bir ana yerleştirir.
    * setTimeout kısıtlamasından (ekran kapalı / arka plan) etkilenmez.
    */
-  scheduleEchoBuffer(buffer: AudioBuffer, when: number, echo: EchoProfile, volume = 1.0): number {
+  scheduleEchoBuffer(buffer: AudioBuffer, when: number, echo: EchoProfile, volume = 1.0, swell = true): number {
     const chain = this.ensureEchoChain(echo);
-    return chain.schedule(buffer, when, Math.max(0, Math.min(1, volume)));
+    return chain.schedule(buffer, when, Math.max(0, Math.min(1, volume)), swell);
   }
 
   /** Yatağı belirtilen süre boyunca kısar, sonra eski seviyeye döndürür. */
@@ -1047,7 +1068,8 @@ class HypnoEngine {
     const t = this.ctx.currentTime;
     this.preSpeechMaster = this.master.gain.value || 0.79;
     this.master.gain.cancelScheduledValues(t);
-    this.master.gain.setTargetAtTime(0.30, t, 0.2);
+    // Konuşma netliği: yatak %30 → %22 (maskeleme azalır, aksan duyulur)
+    this.master.gain.setTargetAtTime(0.22, t, 0.2);
     this.master.gain.setTargetAtTime(this.preSpeechMaster, t + Math.max(0.3, seconds), 0.8);
   }
 

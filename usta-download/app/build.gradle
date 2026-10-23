@@ -3,6 +3,9 @@ plugins {
     id 'org.jetbrains.kotlin.android'
 }
 
+// Web uygulaması tek dosyaya derleniyor (vite-plugin-singlefile).
+def webDist = file("$rootDir/../spatial-audio-processing-script (1)/dist/index.html")
+
 android {
     namespace 'com.usta.download'
     compileSdk 34
@@ -11,8 +14,17 @@ android {
         applicationId "com.usta.download"
         minSdk 24
         targetSdk 34
-        versionCode 1
-        versionName "1.0"
+        versionCode 2
+        versionName "1.1"
+
+        // Boş = APK içindeki gömülü web uygulaması kullanılır (internet gerekmez).
+        // Uzak sürüm için: ./gradlew assembleDebug -PappUrl=https://senin-app.vercel.app
+        def remoteUrl = (project.findProperty("appUrl") ?: "").toString()
+        buildConfigField "String", "APP_URL", "\"${remoteUrl}\""
+    }
+
+    buildFeatures {
+        buildConfig true
     }
 
     buildTypes {
@@ -29,6 +41,29 @@ android {
         jvmTarget = '17'
     }
 }
+
+/**
+ * Web derlemesini APK'nın içine gömer.
+ * Önce `npm run build` çalıştırılmalı (dist/index.html üretir).
+ */
+tasks.register("syncWebAssets") {
+    doLast {
+        def assetsDir = file("$projectDir/src/main/assets")
+        assetsDir.mkdirs()
+        if (webDist.exists()) {
+            copy {
+                from webDist
+                into assetsDir
+                rename { "index.html" }
+            }
+            logger.lifecycle("Gömülü web uygulaması kopyalandı: ${webDist}")
+        } else {
+            logger.warn("dist/index.html bulunamadı — önce web uygulamasını derleyin (npm run build).")
+        }
+    }
+}
+
+preBuild.dependsOn("syncWebAssets")
 
 dependencies {
     implementation 'androidx.core:core-ktx:1.12.0'

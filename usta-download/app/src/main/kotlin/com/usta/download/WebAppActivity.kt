@@ -23,9 +23,15 @@ import androidx.appcompat.app.AppCompatActivity
 class WebAppActivity : AppCompatActivity() {
 
     private lateinit var webView: WebView
+    private lateinit var ttsBridge: TtsBridge
 
-    /** Vercel / kendi sunucu adresiniz. */
-    private val appUrl = "https://your-vercel-app.vercel.app"
+    /**
+     * Boş bırakılırsa APK içindeki gömülü web uygulaması (`assets/index.html`) açılır.
+     * Doluysa uzak adres (ör. Vercel) yüklenir — o zaman `/api/tts` de kullanılabilir.
+     *
+     * build.gradle içinden: `-PappUrl=https://senin-app.vercel.app`
+     */
+    private val appUrl: String = BuildConfig.APP_URL
 
     @SuppressLint("SetJavaScriptEnabled")
     override fun onCreate(savedInstanceState: Bundle?) {
@@ -42,14 +48,22 @@ class WebAppActivity : AppCompatActivity() {
             settings.cacheMode = WebSettings.LOAD_DEFAULT
             settings.mediaPlaybackRequiresUserGesture = false
             settings.allowFileAccess = true
+            settings.allowContentAccess = true
             settings.javaScriptCanOpenWindowsAutomatically = true
             if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.LOLLIPOP) {
                 settings.mixedContentMode = WebSettings.MIXED_CONTENT_COMPATIBILITY_MODE
             }
             webViewClient = WebViewClient()
             webChromeClient = WebChromeClient()
+            ttsBridge = TtsBridge(this@WebAppActivity)
             addJavascriptInterface(Bridge(), "AndroidBridge")
-            loadUrl(appUrl)
+
+            if (appUrl.isBlank()) {
+                // Gömülü sürüm: internet olmadan da çalışır, TTS cihazdan gelir.
+                loadUrl("file:///android_asset/index.html")
+            } else {
+                loadUrl(appUrl)
+            }
         }
 
         setContentView(webView)
@@ -69,6 +83,37 @@ class WebAppActivity : AppCompatActivity() {
 
         @JavascriptInterface
         fun isPlaying(): Boolean = PlaybackForegroundService.isRunning
+
+        // ── Yerel TTS (doğru aksan) ────────────────────────────────
+        @JavascriptInterface
+        fun speak(text: String, tag: String, rate: Float, volume: Float): Boolean {
+            return ttsBridge.speak(text, tag, rate, volume)
+        }
+
+        @JavascriptInterface
+        fun isLanguageAvailable(tag: String): Boolean = ttsBridge.isLanguageAvailable(tag)
+
+        @JavascriptInterface
+        fun isSpeaking(): Boolean = ttsBridge.isSpeaking()
+
+        @JavascriptInterface
+        fun stopSpeaking() {
+            ttsBridge.stopSpeaking()
+        }
+
+        // ── Dosyaya sentez → Web Audio'da gerçek yankı ─────────────
+        @JavascriptInterface
+        fun synthesize(id: String, text: String, tag: String, rate: Float): Boolean {
+            return ttsBridge.synthesize(id, text, tag, rate)
+        }
+
+        @JavascriptInterface
+        fun takeResult(id: String): String = ttsBridge.takeResult(id)
+
+        @JavascriptInterface
+        fun cancelSynthesis(id: String) {
+            ttsBridge.cancelSynthesis(id)
+        }
     }
 
     override fun onResume() {
@@ -89,6 +134,10 @@ class WebAppActivity : AppCompatActivity() {
     }
 
     override fun onDestroy() {
+        try {
+            ttsBridge.shutdown()
+        } catch (_: Exception) {
+        }
         try {
             webView.destroy()
         } catch (_: Exception) {

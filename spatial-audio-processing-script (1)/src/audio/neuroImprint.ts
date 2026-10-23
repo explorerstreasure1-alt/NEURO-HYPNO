@@ -15,7 +15,7 @@ export interface ImprintOptions {
   echo?: EchoProfile;
   realEcho?: boolean;      // TTS → Convolver (gerçek yankı)
   onSet?: (info: { index: number; lines: string[]; gloss: string[]; level: CEFR }) => void;
-  onMode?: (mode: 'echo' | 'fallback') => void;
+  onMode?: (mode: 'echo' | 'fallback' | 'silent') => void;
 }
 
 const LANG_MAP: Record<string, string> = {
@@ -48,7 +48,7 @@ export async function startNeuroImprint(opts: ImprintOptions = {}) {
   } = opts;
 
   const endpoint = getEndpoint();
-  const useReal = realEcho && !!endpoint;
+  const useReal = realEcho;
 
   const myToken = ++runToken;
 
@@ -87,8 +87,13 @@ export async function startNeuroImprint(opts: ImprintOptions = {}) {
         if (useReal) {
           const used = await engine.speakWithRealEcho(line, lang, rate, echo, endpoint);
           onMode?.(used);
+          if (used === 'silent') return; // yanlış aksanla okumak yerine dur
         } else {
-          await engine.speakSwell(line, lang, rate, echo);
+          const ok = await engine.speakSwell(line, lang, rate, echo);
+          if (!ok) {
+            onMode?.('silent');
+            return; // ana dili sesi yok → sessiz döngü yerine dur
+          }
         }
 
         await sleep(700); // tekrarlar arası kısa nefes

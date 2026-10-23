@@ -142,6 +142,52 @@ Android tarafı (`usta-download`):
 
 Bilinen sınır: Web Speech (cihaz sesi) yedeği arka planda Android tarafından kısılabilir; **gerçek yankı yolu (TTS endpoint)** arka planda güvenilirdir.
 
+## 4e. AKSAN GÜVENLİĞİ — "Türk sesiyle İngilizce" hatasının kökü
+
+**Belirti:** İngilizce metin Türk aksanıyla okunuyordu.
+
+**Kök neden:** Android WebView'de `speechSynthesis.getVoices()` çoğu zaman **boş dizi**
+döner. Eski kod `voice = null` kaldığında `utter.lang` yazıp devam ediyordu; motor da
+sistemin **varsayılan (Türkçe) sesini** kullanıyordu. Yani "aksan" değil, yanlış ses.
+
+**Yeni mimari (tek doğruluk kaynağı: `src/audio/voice.ts`):**
+
+1. **Sunucu TTS'i (birincil):** `/api/tts` → Google native ses → `AudioBuffer` →
+   `ConvolverNode` + ping-pong → **ana dili aksanı + gerçek yankı + swell**.
+2. **Android yerel sentezi (çevrimdışı birincil):** `TtsBridge.synthesize()` metni
+   WAV'a yazar → Base64 → `decodeAudioData` → aynı yankı zinciri.
+   Dil her çağrıda **açıkça** `Locale.forLanguageTag(...)` ile ayarlanır.
+   O dilin sesi yoksa `false` döner.
+3. **Android doğrudan okuma:** `speak()` — yalnızca doğru locale varsa.
+4. **Web Speech (son çare):** `pickNativeVoice()` yalnızca **hedef dilin** sesini
+   kabul eder. Ses yoksa **hiç okumaz** ve kullanıcıya bildirir.
+   İngilizce olmayan metin asla İngilizce sese düşmez (eski `fallbackToEnglish`
+   kaldırıldı; `/api/tts` de bilinmeyen dilde 400 döner).
+
+**Görünürlük:** Hızlı Test ekranı seçilen dil için bulunan native sesi gösterir
+(`ANA DİLİ SESİ · en-US`) ve "ENDPOINT BAĞLANTISINI KONTROL ET" ile TTS sunucusunu
+sınar. Ses yoksa uyarı verir; sessiz kalmayı yanlış aksana tercih eder.
+
+**Prosodi koruması:** Swell artık kelime kelime değil, **cümlenin tamamına**
+uygulanır (`EchoChain.startSource(..., swell)` → `0.35 → 1.0 → 0.35`). Kelime
+bölmek tonlamayı/aksanı bozuyordu.
+
+**Yatak kısma:** Konuşma sırasında master `0.79 → 0.24` (maskelenme azalır, aksan
+net duyulur), sonra `restoreMaster()`.
+
+## 4f. NÖROBİLİM GEREKÇESİ (özet)
+
+| Katman | Uygulama | Gerekçe |
+|---|---|---|
+| Uyku yatağı | 136.1 Hz taşıyıcı + 2./3. harmonik, 6 Hz kapı | Küçük hoparlörde "eksik temel" ile delta ritmi duyulur |
+| Binaural | L 200 / R 206 Hz (6 Hz fark) | Beyin sapı üstü iki kulak arası fark → delta eşikleme |
+| Kodlama | 10. dk sonrası 3 tekrarlı, yankılı okuma | Uyku öncesi TMR penceresi + işitsel pekiştirme |
+| Aralık | Her satır arası 2.4 sn, set arası 42 dk | Konsolidasyon aralığı; tekrar baskısı yerine seyreltme |
+| Yankı | RT60 2.4s bodrum / sahne / otopark | Uzamsal ipucu, dikkat çekmeden işitsel belirginlik |
+
+> Not: 1.5/3/6 Hz üçlü delta yığını bir sonraki sürümde yatak modülasyonu olarak
+> eklenecek; şu an 6 Hz izokronik kapı + binaural 6 Hz aktiftir.
+
 ## 5. Sonraki Adımlar (öneri)
 
 1. `onboundary` ile kelime bazlı vurgu ve zamanlama.

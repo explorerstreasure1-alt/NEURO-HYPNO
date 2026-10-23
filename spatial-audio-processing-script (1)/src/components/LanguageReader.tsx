@@ -1,6 +1,8 @@
 import { useState } from 'react';
 import { engine } from '../audio/engine';
 import { phrasesOf } from '../data/phrases';
+import { wordsOf } from '../data/lexicon';
+import { getEndpoint } from '../audio/ttsSettings';
 
 const LANG_MAP: Record<string,string> = {
   ES:'es-ES', FR:'fr-FR', EN:'en-US', DE:'de-DE', IT:'it-IT', JP:'ja-JP'
@@ -10,10 +12,14 @@ export function LanguageReader({ langId='EN' }:{ langId:string }){
   const [idx,setIdx]=useState(0);
   const list = phrasesOf(langId);
   const phrase = list[idx];
+  const words = wordsOf(langId, 'A1');
+  const sample = words[idx % Math.max(1, words.length)]?.text ?? '';
 
   const speak = ()=>{
-    const text = phrase.pattern.replace('___','usta');
-    engine.speakLightWhisper?.(text, LANG_MAP[langId]||'en-US');
+    // Boşluğa Türkçe "usta" koymak yerine o dilin gerçek kelimesi
+    const text = phrase.pattern.includes('___') ? phrase.pattern.replace('___', sample) : phrase.pattern;
+    const target = LANG_MAP[langId] || 'en-US';
+    void engine.speakWithRealEcho(text, target, 0.92, 'basement', getEndpoint());
   };
 
   return (

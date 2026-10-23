@@ -9,9 +9,12 @@
 //    birleştirilir (Google TTS 200 karakter sınırı).
 //  * Endpoint'te {text}/{lang} yoksa sorgu parametresi olarak eklenir.
 
+import { androidTts, localeOf } from './voice';
+
 const DEFAULT_TIMEOUT = 6500;
 const MAX_CHARS = 180;
 const CHUNK_GAP_SEC = 0.12;
+const ANDROID_TIMEOUT = 12_000;
 
 export function getTtsEndpoint(): string | null {
   try {
@@ -128,6 +131,77 @@ async function fetchChunk(ctx: AudioContext, endpoint: string, text: string, lan
   }
 }
 
+function base64ToArrayBuffer(b64: string): ArrayBuffer {
+  const bin = atob(b64);
+  const bytes = new Uint8Array(bin.length);
+  for (let i = 0; i < bin.length; i++) bytes[i] = bin.charCodeAt(i);
+  return bytes.buffer;
+}
+
+function sleep(ms: number): Promise<void> {
+  return new Promise((r) => setTimeout(r, ms));
+}
+
+/**
+ * Android yerel TTS motoruyla metni WAV'a sentezler → AudioBuffer.
+ *
+ * Bu yol:
+ *  - her zaman doğru dil etiketini kullanır (Türkçe sesle İngilizce okumaz),
+ *  - internet gerektirmez,
+ *  - ConvolverNode'a girebildiği için GERÇEK yankı + swell alır.
+ */
+export async function loadAndroidTtsBuffer(
+  ctx: AudioContext,
+  text: string,
+  lang: string,
+  rate = 0.95,
+): Promise<AudioBuffer | null> {
+  const bridge = androidTts();
+  if (!bridge || typeof bridge.synthesize !== 'function' || typeof bridge.takeResult !== 'function') {
+    return null;
+  }
+
+  const clean = text.replace(/\s+/g, ' ').trim();
+  if (!clean) return null;
+
+  const id = `j${Date.now().toString(36)}${Math.random().toString(36).slice(2, 7)}`;
+  let started = false;
+  try {
+    started = !!bridge.synthesize(id, clean, localeOf(lang), rate);
+  } catch {
+    started = false;
+  }
+  if (!started) return null;
+
+  const deadline = Date.now() + ANDROID_TIMEOUT;
+  while (Date.now() < deadline) {
+    await sleep(120);
+    let res = '';
+    try {
+      res = String(bridge.takeResult(id) ?? '');
+    } catch {
+      return null;
+    }
+    if (res === 'ERR') {
+      try { bridge.cancelSynthesis?.(id); } catch { /* noop */ }
+      return null;
+    }
+    if (res.length > 100) {
+      try {
+        const ab = base64ToArrayBuffer(res);
+        if (ab.byteLength < 512) return null;
+        return await ctx.decodeAudioData(ab);
+      } catch (e) {
+        console.warn('[TTS] Android WAV çözülemedi:', e);
+        return null;
+      }
+    }
+  }
+
+  try { bridge.cancelSynthesis?.(id); } catch { /* noop */ }
+  return null;
+}
+
 export async function loadTtsBuffer(
   ctx: AudioContext,
   text: string,
@@ -135,8 +209,6 @@ export async function loadTtsBuffer(
   endpointOverride?: string | null,
 ): Promise<AudioBuffer | null> {
   const endpoint = endpointOverride ?? getTtsEndpoint();
-  if (!endpoint) return null;
-  if (!isTtsAvailable()) return null;
 
   const clean = text.replace(/\s+/g, ' ').trim();
   if (!clean) return null;
@@ -145,29 +217,46 @@ export async function loadTtsBuffer(
   const hit = cache.get(key);
   if (hit) return hit;
 
-  const chunks = splitForTts(clean);
-  const parts: AudioBuffer[] = [];
+  // 1) Sunucu TTS'i (varsa) — Google/Edge sesleri, en doğal aksan
+  if (endpoint && isTtsAvailable()) {
+    const chunks = splitForTts(clean);
+    const parts: AudioBuffer[] = [];
+    let failed = false;
 
-  for (const chunk of chunks) {
-    const buf = await fetchChunk(ctx, endpoint, chunk, lang);
-    if (!buf) {
-      // Endpoint'i 60 sn devre dışı bırak → anında Web Speech'e düş
-      endpointDownUntil = Date.now() + 60_000;
-      return null;
+    for (const chunk of chunks) {
+      const buf = await fetchChunk(ctx, endpoint, chunk, lang);
+      if (!buf) {
+        // Endpoint'i 60 sn devre dışı bırak → hemen yerel yola düş
+        endpointDownUntil = Date.now() + 60_000;
+        failed = true;
+        break;
+      }
+      parts.push(buf);
     }
-    parts.push(buf);
+
+    if (!failed && parts.length > 0) {
+      const merged = parts.length === 1 ? parts[0] : concatBuffers(ctx, parts);
+      remember(key, merged);
+      return merged;
+    }
   }
 
-  if (parts.length === 0) return null;
+  // 2) Android yerel sentez — çevrimdışı, doğru aksan, gerçek yankı
+  const native = await loadAndroidTtsBuffer(ctx, clean, lang);
+  if (native) {
+    remember(key, native);
+    return native;
+  }
 
-  const merged = parts.length === 1 ? parts[0] : concatBuffers(ctx, parts);
+  return null;
+}
 
+function remember(key: string, buffer: AudioBuffer) {
   if (cache.size >= MAX_CACHE) {
     const first = cache.keys().next().value;
     if (first) cache.delete(first);
   }
-  cache.set(key, merged);
-  return merged;
+  cache.set(key, buffer);
 }
 
 /**
